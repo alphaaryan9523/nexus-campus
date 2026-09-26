@@ -1,11 +1,5 @@
-import React, {
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
-
-import { createRoot } from "react-dom/client";
-
+import React, { useEffect, useMemo, useState } from "react";
+import ReactDOM from "react-dom/client";
 import {
   BrowserRouter,
   Routes,
@@ -14,103 +8,65 @@ import {
   Link,
   useNavigate,
   useParams,
-  Navigate,
 } from "react-router-dom";
-
 import {
-  initializeApp,
-} from "firebase/app";
-
-import {
-  getAuth,
-  onAuthStateChanged,
   signInWithEmailAndPassword,
   signOut,
+  onAuthStateChanged,
 } from "firebase/auth";
 
+import { auth } from "./firebase";
 import "./App.css";
 
-/* =========================================================
-   FIREBASE
-========================================================= */
-
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId:
-    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-};
-
-const firebaseApp = initializeApp(firebaseConfig);
-const auth = getAuth(firebaseApp);
+const API_URL =
+  import.meta.env.VITE_API_URL || "http://localhost:5001/api";
 
 /* =========================================================
    API
 ========================================================= */
 
-const API_URL =
-  import.meta.env.VITE_API_URL ||
-  "http://localhost:5001/api";
-
-async function apiFetch(endpoint, options = {}) {
+async function apiFetch(path, options = {}) {
   const user = auth.currentUser;
 
   const headers = {
-    "Content-Type": "application/json",
+    ...(options.body ? { "Content-Type": "application/json" } : {}),
     ...(options.headers || {}),
   };
 
   if (user) {
-    try {
-      const token = await user.getIdToken();
-      headers.Authorization = `Bearer ${token}`;
-    } catch (error) {
-      console.error("Token error:", error);
-    }
+    const token = await user.getIdToken();
+    headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(
-    `${API_URL}${endpoint}`,
-    {
-      ...options,
-      headers,
-    }
-  );
+  const response = await fetch(`${API_URL}${path}`, {
+    ...options,
+    headers,
+  });
 
   const text = await response.text();
 
-  let data = {};
+  let data = null;
 
   try {
-    data = text ? JSON.parse(text) : {};
+    data = text ? JSON.parse(text) : null;
   } catch {
-    data = {
-      message: text,
-    };
+    data = text;
   }
 
   if (!response.ok) {
-    throw new Error(
-      data.message ||
-        data.error ||
-        `Request failed with status ${response.status}`
-    );
+    const message =
+      data?.message ||
+      data?.error ||
+      `Request failed with status ${response.status}`;
+
+    throw new Error(message);
   }
 
   return data;
 }
 
-/* =========================================================
-   HELPERS
-========================================================= */
-
-function getArray(data, keys = []) {
-  if (Array.isArray(data)) {
-    return data;
-  }
+function arrayFromResponse(data, keys = []) {
+  if (Array.isArray(data)) return data;
 
   for (const key of keys) {
     if (Array.isArray(data?.[key])) {
@@ -118,128 +74,99 @@ function getArray(data, keys = []) {
     }
   }
 
-  if (Array.isArray(data?.data)) {
-    return data.data;
-  }
-
   return [];
 }
 
-function getRegistrationId(registration) {
-  return (
-    registration.registrationId ||
-    registration.id ||
-    registration._id
-  );
-}
-
-function getEventId(registration) {
-  return (
-    registration.eventId ||
-    registration.event?.id ||
-    registration.event?.eventId
-  );
-}
-
-function getStudentValue(
-  registration,
-  key
-) {
-  return (
-    registration[key] ??
-    registration.data?.[key] ??
-    registration.formData?.[key] ??
-    "-"
-  );
-}
-
-function formatDate(value) {
-  if (!value) {
-    return "-";
-  }
-
-  try {
-    let date;
-
-    if (
-      typeof value === "object" &&
-      value?.seconds
-    ) {
-      date = new Date(
-        value.seconds * 1000
-      );
-    } else if (
-      typeof value === "object" &&
-      value?._seconds
-    ) {
-      date = new Date(
-        value._seconds * 1000
-      );
-    } else {
-      date = new Date(value);
-    }
-
-    if (Number.isNaN(date.getTime())) {
-      return "-";
-    }
-
-    return date.toLocaleDateString(
-      "en-IN",
-      {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      }
-    );
-  } catch {
-    return "-";
-  }
-}
-
-function formatDateTime(value) {
-  if (!value) {
-    return "-";
-  }
-
-  try {
-    let date;
-
-    if (
-      typeof value === "object" &&
-      value?.seconds
-    ) {
-      date = new Date(
-        value.seconds * 1000
-      );
-    } else {
-      date = new Date(value);
-    }
-
-    if (Number.isNaN(date.getTime())) {
-      return "-";
-    }
-
-    return date.toLocaleString(
-      "en-IN",
-      {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      }
-    );
-  } catch {
-    return "-";
-  }
-}
-
-function createSlug(value) {
+function slugify(value) {
   return String(value || "")
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+    .replace(/^-|-$/g, "");
+}
+
+function formatDate(date) {
+  if (!date) return "-";
+
+  const d = new Date(date);
+
+  if (Number.isNaN(d.getTime())) {
+    return "-";
+  }
+
+  return d.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function formatDateTime(value) {
+  if (!value) return "-";
+
+  const d = new Date(value);
+
+  if (Number.isNaN(d.getTime())) {
+    return "-";
+  }
+
+  return d.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/* =========================================================
+   COMMON
+========================================================= */
+
+function Loading() {
+  return (
+    <div className="loading-state">
+      <div className="spinner" />
+      <span>Loading...</span>
+    </div>
+  );
+}
+
+function ErrorBox({ message }) {
+  if (!message) return null;
+
+  return (
+    <div className="error-box">
+      {message}
+    </div>
+  );
+}
+
+function EmptyState({ title, text }) {
+  return (
+    <div className="empty-state">
+      <div className="empty-icon">∅</div>
+      <h3>{title}</h3>
+      <p>{text}</p>
+    </div>
+  );
+}
+
+function PageHeader({
+  title,
+  description,
+  action,
+}) {
+  return (
+    <div className="page-header">
+      <div>
+        <h1>{title}</h1>
+        {description && <p>{description}</p>}
+      </div>
+
+      {action && <div className="page-header-action">{action}</div>}
+    </div>
+  );
 }
 
 /* =========================================================
@@ -249,106 +176,67 @@ function createSlug(value) {
 function Login() {
   const navigate = useNavigate();
 
-  const [email, setEmail] =
-    useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
 
-  const [password, setPassword] =
-    useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  const [loading, setLoading] =
-    useState(false);
-
-  const [error, setError] =
-    useState("");
-
-  const handleLogin = async (event) => {
-    event.preventDefault();
+  async function handleLogin(e) {
+    e.preventDefault();
 
     setError("");
     setLoading(true);
 
     try {
-      await signInWithEmailAndPassword(
-        auth,
-        email,
-        password
-      );
-
+      await signInWithEmailAndPassword(auth, email, password);
       navigate("/dashboard");
     } catch (err) {
-      console.error(err);
-
       setError(
-        err.code ===
-          "auth/invalid-credential"
-          ? "Invalid email or password."
-          : err.message ||
-              "Login failed."
+        err?.message?.replace("Firebase:", "").trim() ||
+          "Login failed."
       );
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   return (
     <div className="login-page">
       <div className="login-card">
-        <div className="login-logo">
-          N
-        </div>
+        <div className="login-logo">N</div>
 
         <h1>NexusCampus</h1>
+        <p className="login-subtitle">Admin Panel</p>
 
-        <p className="login-subtitle">
-          Admin Panel
-        </p>
-
-        <form
-          onSubmit={handleLogin}
-          className="login-form"
-        >
-          <label>
-            Email
-          </label>
+        <form onSubmit={handleLogin}>
+          <label>Email</label>
 
           <input
             type="email"
-            placeholder="admin@example.com"
             value={email}
-            onChange={(e) =>
-              setEmail(e.target.value)
-            }
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="admin@example.com"
             required
           />
 
-          <label>
-            Password
-          </label>
+          <label>Password</label>
 
           <input
             type="password"
-            placeholder="••••••••"
             value={password}
-            onChange={(e) =>
-              setPassword(e.target.value)
-            }
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="••••••••"
             required
           />
 
-          {error && (
-            <div className="error-message">
-              {error}
-            </div>
-          )}
+          {error && <ErrorBox message={error} />}
 
           <button
-            type="submit"
-            className="primary-button full-width"
+            className="btn btn-primary login-button"
             disabled={loading}
           >
-            {loading
-              ? "Signing in..."
-              : "Sign In"}
+            {loading ? "Signing in..." : "Sign In"}
           </button>
         </form>
       </div>
@@ -360,110 +248,76 @@ function Login() {
    LAYOUT
 ========================================================= */
 
-function Layout({
-  children,
-  user,
-}) {
+function Layout({ children, user }) {
   const navigate = useNavigate();
 
-  const logout = async () => {
+  async function logout() {
     await signOut(auth);
     navigate("/login");
-  };
+  }
 
   return (
     <div className="app-layout">
-
       <aside className="sidebar">
-
         <div className="brand">
-
-          <div className="brand-icon">
-            N
-          </div>
+          <div className="brand-logo">N</div>
 
           <div>
-            <div className="brand-name">
-              NexusCampus
-            </div>
-
-            <div className="brand-subtitle">
-              Admin Panel
-            </div>
+            <div className="brand-name">NexusCampus</div>
+            <div className="brand-subtitle">Admin Panel</div>
           </div>
-
         </div>
 
         <nav className="sidebar-nav">
-
           <NavLink
             to="/dashboard"
             className={({ isActive }) =>
-              isActive
-                ? "nav-item active"
-                : "nav-item"
+              `nav-item ${isActive ? "active" : ""}`
             }
           >
-            <span>▦</span>
+            <span className="nav-icon">▦</span>
             Dashboard
           </NavLink>
 
           <NavLink
             to="/clubs"
             className={({ isActive }) =>
-              isActive
-                ? "nav-item active"
-                : "nav-item"
+              `nav-item ${isActive ? "active" : ""}`
             }
           >
-            <span>♟</span>
+            <span className="nav-icon">♟</span>
             Clubs
           </NavLink>
 
           <NavLink
             to="/events"
             className={({ isActive }) =>
-              isActive
-                ? "nav-item active"
-                : "nav-item"
+              `nav-item ${isActive ? "active" : ""}`
             }
           >
-            <span>◫</span>
+            <span className="nav-icon">▣</span>
             Events
           </NavLink>
 
           <NavLink
             to="/participation"
             className={({ isActive }) =>
-              isActive
-                ? "nav-item active"
-                : "nav-item"
+              `nav-item ${isActive ? "active" : ""}`
             }
           >
-            <span>✓</span>
+            <span className="nav-icon">✓</span>
             Participation
           </NavLink>
-
         </nav>
 
-        <div className="sidebar-user">
-
+        <div className="sidebar-footer">
           <div className="user-avatar">
-            {user?.email
-              ? user.email
-                  .charAt(0)
-                  .toUpperCase()
-              : "A"}
+            {(user?.email?.[0] || "A").toUpperCase()}
           </div>
 
           <div className="user-info">
-            <strong>
-              Admin
-            </strong>
-
-            <span>
-              {user?.email || ""}
-            </span>
+            <strong>Admin</strong>
+            <span>{user?.email || "Administrator"}</span>
           </div>
 
           <button
@@ -473,15 +327,12 @@ function Layout({
           >
             ↪
           </button>
-
         </div>
-
       </aside>
 
       <main className="main-content">
         {children}
       </main>
-
     </div>
   );
 }
@@ -491,333 +342,193 @@ function Layout({
 ========================================================= */
 
 function Dashboard() {
-  const [events, setEvents] =
-    useState([]);
+  const [events, setEvents] = useState([]);
+  const [clubs, setClubs] = useState([]);
+  const [registrations, setRegistrations] = useState([]);
 
-  const [clubs, setClubs] =
-    useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const [registrations, setRegistrations] =
-    useState([]);
-
-  const [loading, setLoading] =
-    useState(true);
-
-  const loadData = async () => {
-    setLoading(true);
-
+  async function loadDashboard() {
     try {
-      const [
-        eventsResponse,
-        clubsResponse,
-        registrationsResponse,
-      ] = await Promise.all([
-        apiFetch("/events"),
-        apiFetch("/clubs"),
-        apiFetch("/registrations"),
-      ]);
+      setLoading(true);
+      setError("");
+
+      const [eventsRes, clubsRes, registrationsRes] =
+        await Promise.all([
+          apiFetch("/events"),
+          apiFetch("/clubs"),
+          apiFetch("/registrations"),
+        ]);
 
       setEvents(
-        getArray(eventsResponse, [
-          "events",
-        ])
+        arrayFromResponse(eventsRes, ["events", "data"])
       );
 
       setClubs(
-        getArray(clubsResponse, [
-          "clubs",
-        ])
+        arrayFromResponse(clubsRes, ["clubs", "data"])
       );
 
       setRegistrations(
-        getArray(
-          registrationsResponse,
-          ["registrations"]
-        )
+        arrayFromResponse(registrationsRes, [
+          "registrations",
+          "data",
+        ])
       );
-    } catch (error) {
-      console.error(
-        "Dashboard error:",
-        error
-      );
+    } catch (err) {
+      setError(err.message);
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   useEffect(() => {
-    loadData();
+    loadDashboard();
   }, []);
 
-  const registrationsByEvent =
-    useMemo(() => {
-      const result = {};
+  const publishedEvents = events.filter(
+    (event) => event.status === "published"
+  ).length;
 
-      registrations.forEach(
-        (registration) => {
-          const eventId =
-            getEventId(registration);
+  const recentEvents = [...events]
+    .sort((a, b) => {
+      const da = new Date(a.date || 0).getTime();
+      const db = new Date(b.date || 0).getTime();
+      return db - da;
+    })
+    .slice(0, 5);
 
-          if (!eventId) return;
-
-          result[eventId] =
-            (result[eventId] || 0) + 1;
-        }
-      );
-
-      return result;
-    }, [registrations]);
+  if (loading) return <Loading />;
 
   return (
-    <div className="page">
-
+    <>
       <PageHeader
         title="Dashboard"
-        subtitle="Overview of your campus events and registrations."
+        description="Overview of your campus events and registrations."
       />
 
+      <ErrorBox message={error} />
+
       <div className="stats-grid">
+        <div className="stat-card">
+          <div className="stat-title">Total Events</div>
+          <div className="stat-icon blue">▣</div>
+          <div className="stat-number">{events.length}</div>
+        </div>
 
-        <StatCard
-          title="Total Events"
-          value={events.length}
-          icon="◫"
-        />
+        <div className="stat-card">
+          <div className="stat-title">Total Clubs</div>
+          <div className="stat-icon purple">♟</div>
+          <div className="stat-number">{clubs.length}</div>
+        </div>
 
-        <StatCard
-          title="Total Clubs"
-          value={clubs.length}
-          icon="♟"
-        />
+        <div className="stat-card">
+          <div className="stat-title">Registrations</div>
+          <div className="stat-icon green">♙</div>
+          <div className="stat-number">
+            {registrations.length}
+          </div>
+        </div>
 
-        <StatCard
-          title="Registrations"
-          value={registrations.length}
-          icon="♙"
-        />
-
-        <StatCard
-          title="Published Events"
-          value={
-            events.filter(
-              (event) =>
-                event.status ===
-                "published"
-            ).length
-          }
-          icon="✓"
-        />
-
+        <div className="stat-card">
+          <div className="stat-title">Published Events</div>
+          <div className="stat-icon orange">✓</div>
+          <div className="stat-number">
+            {publishedEvents}
+          </div>
+        </div>
       </div>
 
       <div className="dashboard-grid">
-
-        <div className="content-card">
-
-          <div className="content-card-header">
-
+        <section className="panel">
+          <div className="panel-header">
             <div>
-              <h2>
-                Recent Events
-              </h2>
-
-              <p>
-                Latest campus events
-              </p>
+              <h2>Recent Events</h2>
+              <p>Latest campus events</p>
             </div>
 
-            <Link
-              to="/events"
-              className="secondary-button"
-            >
+            <Link to="/events" className="text-link">
               View All
             </Link>
-
           </div>
 
-          {loading ? (
-            <div className="empty-state">
-              Loading...
-            </div>
-          ) : events.length === 0 ? (
-            <div className="empty-state">
-              No events created yet.
-            </div>
+          {recentEvents.length === 0 ? (
+            <EmptyState
+              title="No events"
+              text="Create your first campus event."
+            />
           ) : (
-            <div className="simple-list">
+            <div className="recent-events">
+              {recentEvents.map((event) => {
+                const count = registrations.filter(
+                  (registration) =>
+                    registration.eventId === event.id
+                ).length;
 
-              {events
-                .slice(0, 5)
-                .map((event) => (
-                  <div
-                    className="list-row"
+                return (
+                  <Link
                     key={event.id}
+                    to={`/events/${event.id}`}
+                    className="recent-event"
                   >
-
-                    <div className="list-icon">
-                      ◫
+                    <div className="recent-event-icon">
+                      ▣
                     </div>
 
-                    <div className="list-main">
-
-                      <strong>
-                        {event.title}
-                      </strong>
-
+                    <div className="recent-event-info">
+                      <strong>{event.title}</strong>
                       <span>
-                        {event.date
-                          ? formatDate(
-                              event.date
-                            )
-                          : "No date"}
+                        {formatDate(event.date)}
                       </span>
-
+                      <small>
+                        {count} registered
+                      </small>
                     </div>
-
-                    <div className="list-count">
-                      {registrationsByEvent[
-                        event.id
-                      ] || 0}{" "}
-                      registered
-                    </div>
-
-                  </div>
-                ))}
-
+                  </Link>
+                );
+              })}
             </div>
           )}
+        </section>
 
-        </div>
-
-        <div className="content-card">
-
-          <div className="content-card-header">
-
+        <section className="panel">
+          <div className="panel-header">
             <div>
-              <h2>
-                Clubs
-              </h2>
-
-              <p>
-                Active campus clubs
-              </p>
+              <h2>Clubs</h2>
+              <p>Active campus clubs</p>
             </div>
 
-            <Link
-              to="/clubs"
-              className="secondary-button"
-            >
+            <Link to="/clubs" className="text-link">
               Manage
             </Link>
-
           </div>
 
           {clubs.length === 0 ? (
-            <div className="empty-state">
-              No clubs created yet.
-            </div>
+            <EmptyState
+              title="No clubs"
+              text="Create a club to get started."
+            />
           ) : (
-            <div className="simple-list">
-
-              {clubs
-                .slice(0, 5)
-                .map((club) => (
-                  <div
-                    className="list-row"
-                    key={club.id}
-                  >
-
-                    <div className="club-avatar">
-                      {club.name
-                        ?.charAt(0)
-                        ?.toUpperCase() ||
-                        "C"}
-                    </div>
-
-                    <div className="list-main">
-
-                      <strong>
-                        {club.name}
-                      </strong>
-
-                      <span>
-                        {club.email ||
-                          "No email"}
-                      </span>
-
-                    </div>
-
+            <div className="club-mini-list">
+              {clubs.slice(0, 6).map((club) => (
+                <div className="club-mini" key={club.id}>
+                  <div className="club-avatar">
+                    {(club.name?.[0] || "C").toUpperCase()}
                   </div>
-                ))}
 
+                  <div>
+                    <strong>{club.name}</strong>
+                    <span>
+                      {club.email || "No email"}
+                    </span>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
-
-        </div>
-
+        </section>
       </div>
-
-    </div>
-  );
-}
-
-/* =========================================================
-   STAT CARD
-========================================================= */
-
-function StatCard({
-  title,
-  value,
-  icon,
-}) {
-  return (
-    <div className="stat-card">
-
-      <div className="stat-top">
-
-        <span>
-          {title}
-        </span>
-
-        <div className="stat-icon">
-          {icon}
-        </div>
-
-      </div>
-
-      <strong>
-        {value}
-      </strong>
-
-    </div>
-  );
-}
-
-/* =========================================================
-   PAGE HEADER
-========================================================= */
-
-function PageHeader({
-  title,
-  subtitle,
-  action,
-}) {
-  return (
-    <div className="page-header">
-
-      <div>
-        <h1>
-          {title}
-        </h1>
-
-        <p>
-          {subtitle}
-        </p>
-      </div>
-
-      {action && action}
-
-    </div>
+    </>
   );
 }
 
@@ -826,458 +537,249 @@ function PageHeader({
 ========================================================= */
 
 function Clubs() {
-  const [clubs, setClubs] =
-    useState([]);
+  const [clubs, setClubs] = useState([]);
+  const [events, setEvents] = useState([]);
 
-  const [loading, setLoading] =
-    useState(true);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-  const [showForm, setShowForm] =
-    useState(false);
+  const [error, setError] = useState("");
 
-  const [editingClub, setEditingClub] =
-    useState(null);
+  const [showForm, setShowForm] = useState(false);
 
-  const loadClubs = async () => {
+  const [form, setForm] = useState({
+    name: "",
+    description: "",
+    president: "",
+    email: "",
+  });
+
+  async function loadClubs() {
     try {
       setLoading(true);
 
-      const response =
-        await apiFetch("/clubs");
+      const [clubsRes, eventsRes] = await Promise.all([
+        apiFetch("/clubs"),
+        apiFetch("/events"),
+      ]);
 
       setClubs(
-        getArray(response, ["clubs"])
+        arrayFromResponse(clubsRes, ["clubs", "data"])
       );
-    } catch (error) {
-      console.error(error);
-      alert(error.message);
+
+      setEvents(
+        arrayFromResponse(eventsRes, ["events", "data"])
+      );
+    } catch (err) {
+      setError(err.message);
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   useEffect(() => {
     loadClubs();
   }, []);
 
-  const deleteClub = async (club) => {
-    const confirmed =
-      window.confirm(
-        `Delete ${club.name}?`
-      );
-
-    if (!confirmed) return;
+  async function createClub(e) {
+    e.preventDefault();
 
     try {
-      await apiFetch(
-        `/clubs/${club.id}`,
-        {
-          method: "DELETE",
-        }
-      );
+      setSaving(true);
+      setError("");
 
-      loadClubs();
-    } catch (error) {
-      alert(error.message);
+      await apiFetch("/clubs", {
+        method: "POST",
+        body: JSON.stringify(form),
+      });
+
+      setForm({
+        name: "",
+        description: "",
+        president: "",
+        email: "",
+      });
+
+      setShowForm(false);
+
+      await loadClubs();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
     }
-  };
+  }
+
+  if (loading) return <Loading />;
 
   return (
-    <div className="page">
-
+    <>
       <PageHeader
         title="Clubs"
-        subtitle="Manage campus clubs and their events."
+        description="Manage campus clubs and their events."
         action={
           <button
-            className="primary-button"
-            onClick={() => {
-              setEditingClub(null);
-              setShowForm(true);
-            }}
+            className="btn btn-primary"
+            onClick={() => setShowForm(!showForm)}
           >
             + Add Club
           </button>
         }
       />
 
-      {showForm && (
-        <ClubForm
-          club={editingClub}
-          onClose={() =>
-            setShowForm(false)
-          }
-          onSaved={() => {
-            setShowForm(false);
-            loadClubs();
-          }}
-        />
-      )}
+      <ErrorBox message={error} />
 
-      {loading ? (
-        <div className="loading-box">
-          Loading clubs...
-        </div>
-      ) : clubs.length === 0 ? (
-        <div className="empty-card">
-          <div className="empty-icon">
-            ♟
+      {showForm && (
+        <div className="panel form-panel">
+          <div className="panel-header">
+            <div>
+              <h2>Create Club</h2>
+              <p>Add a new campus club.</p>
+            </div>
           </div>
 
-          <h2>
-            No clubs yet
-          </h2>
+          <form onSubmit={createClub}>
+            <div className="form-grid">
+              <div className="form-group">
+                <label>Club Name *</label>
+                <input
+                  value={form.name}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      name: e.target.value,
+                    })
+                  }
+                  required
+                />
+              </div>
 
-          <p>
-            Create your first campus club.
-          </p>
+              <div className="form-group">
+                <label>President</label>
+                <input
+                  value={form.president}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      president: e.target.value,
+                    })
+                  }
+                />
+              </div>
 
-          <button
-            className="primary-button"
-            onClick={() =>
-              setShowForm(true)
-            }
-          >
-            Create Club
-          </button>
+              <div className="form-group">
+                <label>Email</label>
+                <input
+                  type="email"
+                  value={form.email}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      email: e.target.value,
+                    })
+                  }
+                />
+              </div>
+
+              <div className="form-group full">
+                <label>Description</label>
+                <textarea
+                  value={form.description}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      description: e.target.value,
+                    })
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="form-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setShowForm(false)}
+              >
+                Cancel
+              </button>
+
+              <button
+                className="btn btn-primary"
+                disabled={saving}
+              >
+                {saving ? "Creating..." : "Create Club"}
+              </button>
+            </div>
+          </form>
         </div>
+      )}
+
+      {clubs.length === 0 ? (
+        <EmptyState
+          title="No clubs found"
+          text="Create a club to start associating events."
+        />
       ) : (
         <div className="club-grid">
+          {clubs.map((club) => {
+            const clubEvents = events.filter(
+              (event) => event.clubId === club.id
+            );
 
-          {clubs.map((club) => (
-            <ClubCard
-              key={club.id}
-              club={club}
-              onEdit={() => {
-                setEditingClub(club);
-                setShowForm(true);
-              }}
-              onDelete={() =>
-                deleteClub(club)
-              }
-            />
-          ))}
+            return (
+              <div className="club-card" key={club.id}>
+                <div className="club-card-top">
+                  <div className="club-large-avatar">
+                    {(club.name?.[0] || "C").toUpperCase()}
+                  </div>
 
+                  <div>
+                    <h3>{club.name}</h3>
+                    <span>
+                      {club.email || "No email"}
+                    </span>
+                  </div>
+                </div>
+
+                <p className="club-description">
+                  {club.description ||
+                    "No description provided."}
+                </p>
+
+                <div className="club-meta">
+                  <span>
+                    President:{" "}
+                    <strong>
+                      {club.president || "Not assigned"}
+                    </strong>
+                  </span>
+
+                  <span>
+                    Events: <strong>{clubEvents.length}</strong>
+                  </span>
+                </div>
+
+                {clubEvents.length > 0 && (
+                  <div className="club-events">
+                    <strong>Associated Events</strong>
+
+                    {clubEvents.map((event) => (
+                      <Link
+                        key={event.id}
+                        to={`/events/${event.id}`}
+                      >
+                        {event.title}
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
-
-    </div>
-  );
-}
-
-/* =========================================================
-   CLUB FORM
-========================================================= */
-
-function ClubForm({
-  club,
-  onClose,
-  onSaved,
-}) {
-  const [name, setName] =
-    useState(club?.name || "");
-
-  const [description, setDescription] =
-    useState(
-      club?.description || ""
-    );
-
-  const [president, setPresident] =
-    useState(
-      club?.president || ""
-    );
-
-  const [email, setEmail] =
-    useState(club?.email || "");
-
-  const [loading, setLoading] =
-    useState(false);
-
-  const submit = async (event) => {
-    event.preventDefault();
-
-    setLoading(true);
-
-    try {
-      const payload = {
-        name,
-        description,
-        president,
-        email,
-      };
-
-      if (club?.id) {
-        await apiFetch(
-          `/clubs/${club.id}`,
-          {
-            method: "PUT",
-            body: JSON.stringify(
-              payload
-            ),
-          }
-        );
-      } else {
-        await apiFetch("/clubs", {
-          method: "POST",
-          body: JSON.stringify(
-            payload
-          ),
-        });
-      }
-
-      onSaved();
-    } catch (error) {
-      alert(error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="modal-overlay">
-
-      <div className="modal">
-
-        <div className="modal-header">
-
-          <div>
-            <h2>
-              {club
-                ? "Edit Club"
-                : "Create Club"}
-            </h2>
-
-            <p>
-              Add club information.
-            </p>
-          </div>
-
-          <button
-            className="close-button"
-            onClick={onClose}
-          >
-            ×
-          </button>
-
-        </div>
-
-        <form
-          className="form"
-          onSubmit={submit}
-        >
-
-          <label>
-            Club Name
-          </label>
-
-          <input
-            value={name}
-            onChange={(e) =>
-              setName(e.target.value)
-            }
-            placeholder="Coding Club"
-            required
-          />
-
-          <label>
-            Description
-          </label>
-
-          <textarea
-            value={description}
-            onChange={(e) =>
-              setDescription(
-                e.target.value
-              )
-            }
-            placeholder="Club description"
-            rows="4"
-          />
-
-          <label>
-            President
-          </label>
-
-          <input
-            value={president}
-            onChange={(e) =>
-              setPresident(
-                e.target.value
-              )
-            }
-            placeholder="President name"
-          />
-
-          <label>
-            Club Email
-          </label>
-
-          <input
-            type="email"
-            value={email}
-            onChange={(e) =>
-              setEmail(e.target.value)
-            }
-            placeholder="club@college.edu"
-          />
-
-          <div className="form-actions">
-
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={onClose}
-            >
-              Cancel
-            </button>
-
-            <button
-              type="submit"
-              className="primary-button"
-              disabled={loading}
-            >
-              {loading
-                ? "Saving..."
-                : club
-                ? "Update Club"
-                : "Create Club"}
-            </button>
-
-          </div>
-
-        </form>
-
-      </div>
-
-    </div>
-  );
-}
-
-/* =========================================================
-   CLUB CARD
-========================================================= */
-
-function ClubCard({
-  club,
-  onEdit,
-  onDelete,
-}) {
-  const [events, setEvents] =
-    useState([]);
-
-  useEffect(() => {
-    if (!club?.id) return;
-
-    apiFetch(
-      `/clubs/${club.id}/events`
-    )
-      .then((response) => {
-        setEvents(
-          getArray(response, [
-            "events",
-          ])
-        );
-      })
-      .catch((error) => {
-        console.error(error);
-      });
-  }, [club?.id]);
-
-  return (
-    <div className="club-card">
-
-      <div className="club-card-top">
-
-        <div className="club-large-avatar">
-          {club.name
-            ?.charAt(0)
-            ?.toUpperCase() || "C"}
-        </div>
-
-        <div className="club-actions">
-
-          <button
-            className="icon-button"
-            onClick={onEdit}
-            title="Edit"
-          >
-            ✎
-          </button>
-
-          <button
-            className="icon-button danger"
-            onClick={onDelete}
-            title="Delete"
-          >
-            ×
-          </button>
-
-        </div>
-
-      </div>
-
-      <h3>
-        {club.name}
-      </h3>
-
-      <p className="club-description">
-        {club.description ||
-          "No description available."}
-      </p>
-
-      <div className="club-meta">
-
-        <span>
-          President:{" "}
-          <strong>
-            {club.president ||
-              "-"}
-          </strong>
-        </span>
-
-        <span>
-          {club.email || "No email"}
-        </span>
-
-      </div>
-
-      <div className="club-events">
-
-        <div className="section-label">
-          Events
-          <span>
-            {events.length}
-          </span>
-        </div>
-
-        {events.length === 0 ? (
-          <span className="muted">
-            No events yet.
-          </span>
-        ) : (
-          events
-            .slice(0, 3)
-            .map((event) => (
-              <div
-                className="mini-event"
-                key={event.id}
-              >
-                <span>
-                  {event.title}
-                </span>
-
-                <small>
-                  {formatDate(
-                    event.date
-                  )}
-                </small>
-              </div>
-            ))
-        )}
-
-      </div>
-
-    </div>
+    </>
   );
 }
 
@@ -1286,260 +788,118 @@ function ClubCard({
 ========================================================= */
 
 function Events() {
-  const navigate = useNavigate();
+  const [events, setEvents] = useState([]);
+  const [clubs, setClubs] = useState([]);
 
-  const [events, setEvents] =
-    useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const [clubs, setClubs] =
-    useState([]);
-
-  const [registrations, setRegistrations] =
-    useState([]);
-
-  const [loading, setLoading] =
-    useState(true);
-
-  const loadData = async () => {
+  async function loadEvents() {
     try {
       setLoading(true);
 
-      const [
-        eventsResponse,
-        clubsResponse,
-        registrationsResponse,
-      ] = await Promise.all([
+      const [eventsRes, clubsRes] = await Promise.all([
         apiFetch("/events"),
         apiFetch("/clubs"),
-        apiFetch("/registrations"),
       ]);
 
       setEvents(
-        getArray(eventsResponse, [
-          "events",
-        ])
+        arrayFromResponse(eventsRes, ["events", "data"])
       );
 
       setClubs(
-        getArray(clubsResponse, [
-          "clubs",
-        ])
+        arrayFromResponse(clubsRes, ["clubs", "data"])
       );
-
-      setRegistrations(
-        getArray(
-          registrationsResponse,
-          ["registrations"]
-        )
-      );
-    } catch (error) {
-      console.error(error);
-      alert(error.message);
+    } catch (err) {
+      setError(err.message);
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   useEffect(() => {
-    loadData();
+    loadEvents();
   }, []);
 
-  const deleteEvent = async (event) => {
-    const confirmed =
-      window.confirm(
-        `Delete "${event.title}"?`
-      );
-
-    if (!confirmed) return;
-
-    try {
-      await apiFetch(
-        `/events/${event.id}`,
-        {
-          method: "DELETE",
-        }
-      );
-
-      loadData();
-    } catch (error) {
-      alert(error.message);
-    }
-  };
-
-  const registrationCount = (
-    eventId
-  ) =>
-    registrations.filter(
-      (registration) =>
-        getEventId(registration) ===
-        eventId
-    ).length;
+  if (loading) return <Loading />;
 
   return (
-    <div className="page">
-
+    <>
       <PageHeader
         title="Events"
-        subtitle="Create and manage campus events."
+        description="Create and manage campus events."
         action={
-          <button
-            className="primary-button"
-            onClick={() =>
-              navigate("/events/new")
-            }
+          <Link
+            to="/events/new"
+            className="btn btn-primary"
           >
             + Create Event
-          </button>
+          </Link>
         }
       />
 
-      {loading ? (
-        <div className="loading-box">
-          Loading events...
-        </div>
-      ) : events.length === 0 ? (
-        <div className="empty-card">
-          <div className="empty-icon">
-            ◫
-          </div>
+      <ErrorBox message={error} />
 
-          <h2>
-            No events yet
-          </h2>
-
-          <p>
-            Create your first campus event.
-          </p>
-
-          <button
-            className="primary-button"
-            onClick={() =>
-              navigate("/events/new")
-            }
-          >
-            Create Event
-          </button>
-        </div>
+      {events.length === 0 ? (
+        <EmptyState
+          title="No events"
+          text="Create your first campus event."
+        />
       ) : (
-        <div className="events-grid">
+        <div className="event-grid">
+          {events.map((event) => {
+            const club =
+              clubs.find(
+                (item) => item.id === event.clubId
+              )?.name ||
+              event.clubName ||
+              "Independent";
 
-          {events.map((event) => (
-            <div
-              className="event-card"
-              key={event.id}
-            >
-
-              <div className="event-card-top">
-
-                <span
-                  className={`event-status ${
-                    event.status ||
-                    "draft"
-                  }`}
-                >
-                  {event.status ||
-                    "draft"}
-                </span>
-
-                <button
-                  className="icon-button danger"
-                  onClick={() =>
-                    deleteEvent(event)
-                  }
-                >
-                  ×
-                </button>
-
-              </div>
-
-              <h3>
-                {event.title}
-              </h3>
-
-              <p className="event-description">
-                {event.description ||
-                  "No description."}
-              </p>
-
-              <div className="event-info">
-
-                <div>
-                  <span>
-                    Date
+            return (
+              <Link
+                to={`/events/${event.id}`}
+                className="event-card"
+                key={event.id}
+              >
+                <div className="event-card-header">
+                  <span
+                    className={`status-badge ${
+                      event.status === "published"
+                        ? "published"
+                        : "draft"
+                    }`}
+                  >
+                    {event.status || "draft"}
                   </span>
-
-                  <strong>
-                    {formatDate(
-                      event.date
-                    )}
-                  </strong>
                 </div>
 
-                <div>
-                  <span>
-                    Time
-                  </span>
+                <h3>{event.title}</h3>
 
-                  <strong>
-                    {event.time ||
-                      "-"}
-                  </strong>
+                <p>
+                  {event.description ||
+                    "No description available."}
+                </p>
+
+                <div className="event-info">
+                  <span>📅 {formatDate(event.date)}</span>
+                  <span>◷ {event.time || "-"}</span>
+                  <span>⌖ {event.venue || "-"}</span>
+                  <span>♟ {club}</span>
                 </div>
 
-                <div>
+                <div className="event-card-footer">
                   <span>
-                    Venue
+                    Capacity: {event.capacity || "-"}
                   </span>
 
-                  <strong>
-                    {event.venue ||
-                      "-"}
-                  </strong>
+                  <span>View Details →</span>
                 </div>
-
-                <div>
-                  <span>
-                    Club
-                  </span>
-
-                  <strong>
-                    {event.clubName ||
-                      clubs.find(
-                        (club) =>
-                          club.id ===
-                          event.clubId
-                      )?.name ||
-                      "Independent"}
-                  </strong>
-                </div>
-
-              </div>
-
-              <div className="event-footer">
-
-                <span>
-                  {registrationCount(
-                    event.id
-                  )}{" "}
-                  registrations
-                </span>
-
-                <Link
-                  className="secondary-button"
-                  to={`/events/${event.id}`}
-                >
-                  View
-                </Link>
-
-              </div>
-
-            </div>
-          ))}
-
+              </Link>
+            );
+          })}
         </div>
       )}
-
-    </div>
+    </>
   );
 }
 
@@ -1550,11 +910,10 @@ function Events() {
 function CreateEvent() {
   const navigate = useNavigate();
 
-  const [clubs, setClubs] =
-    useState([]);
+  const [clubs, setClubs] = useState([]);
 
-  const [loading, setLoading] =
-    useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
   const [form, setForm] = useState({
     title: "",
@@ -1563,189 +922,107 @@ function CreateEvent() {
     time: "",
     venue: "",
     capacity: "",
+    slug: "",
     status: "published",
     clubId: "",
   });
 
-  const loadClubs = async () => {
-    try {
-      const response =
-        await apiFetch("/clubs");
-
-      setClubs(
-        getArray(response, [
-          "clubs",
-        ])
-      );
-    } catch (error) {
-      console.error(error);
-    }
-  };
-
   useEffect(() => {
+    async function loadClubs() {
+      try {
+        const response = await apiFetch("/clubs");
+
+        setClubs(
+          arrayFromResponse(response, [
+            "clubs",
+            "data",
+          ])
+        );
+      } catch (err) {
+        setError(err.message);
+      }
+    }
+
     loadClubs();
   }, []);
 
-  const updateField = (
-    key,
-    value
-  ) => {
+  function updateField(name, value) {
     setForm((previous) => ({
       ...previous,
-      [key]: value,
+      [name]: value,
     }));
-  };
+  }
 
-  const submit = async (event) => {
-    event.preventDefault();
-
-    setLoading(true);
+  async function submit(e) {
+    e.preventDefault();
 
     try {
-      const selectedClub =
-        clubs.find(
-          (club) =>
-            club.id === form.clubId
-        );
+      setSaving(true);
+      setError("");
 
-      const slug = createSlug(
-        form.title
+      const selectedClub = clubs.find(
+        (club) => club.id === form.clubId
       );
 
-      const eventPayload = {
+      const payload = {
         title: form.title,
-        description:
-          form.description,
+        description: form.description,
         date: form.date,
         time: form.time,
         venue: form.venue,
-        capacity: Number(
-          form.capacity || 0
-        ),
-        slug,
+        capacity: Number(form.capacity),
+        slug:
+          form.slug.trim() ||
+          slugify(form.title),
         status: form.status,
-        clubId:
-          selectedClub?.id || null,
-        clubName:
-          selectedClub?.name ||
-          null,
+        clubId: selectedClub?.id || null,
+        clubName: selectedClub?.name || "Independent",
       };
 
-      const response =
-        await apiFetch("/events", {
-          method: "POST",
-          body: JSON.stringify(
-            eventPayload
-          ),
-        });
+      const response = await apiFetch("/events", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
 
-      const createdEvent =
-        response.event ||
-        response.data ||
-        response;
-
-      /*
-       * If the backend returns the event ID,
-       * we can create a default registration form.
-       */
       const eventId =
-        createdEvent.id ||
-        createdEvent.eventId;
+        response?.id ||
+        response?.event?.id ||
+        response?.data?.id;
 
       if (eventId) {
-        try {
-          await apiFetch("/forms", {
-            method: "POST",
-            body: JSON.stringify({
-              title: `${form.title} Registration Form`,
-              description: `Register for ${form.title}`,
-              eventId,
-              slug: `${slug}-registration`,
-              fields: [
-                {
-                  fieldId: "name",
-                  label: "Full Name",
-                  type: "text",
-                  required: true,
-                },
-                {
-                  fieldId: "email",
-                  label: "Email",
-                  type: "email",
-                  required: true,
-                },
-                {
-                  fieldId: "phone",
-                  label: "Phone",
-                  type: "phone",
-                  required: true,
-                },
-                {
-                  fieldId: "college",
-                  label: "College",
-                  type: "text",
-                  required: true,
-                },
-              ],
-            }),
-          });
-        } catch (formError) {
-          /*
-           * Event is already created.
-           * Do not fail the whole event creation
-           * because the form endpoint may be optional.
-           */
-          console.warn(
-            "Default form creation failed:",
-            formError
-          );
-        }
+        navigate(`/events/${eventId}`);
+      } else {
+        navigate("/events");
       }
-
-      alert(
-        "Event created successfully."
-      );
-
-      navigate("/events");
-    } catch (error) {
-      console.error(error);
-      alert(error.message);
+    } catch (err) {
+      setError(err.message);
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
-  };
+  }
 
   return (
-    <div className="page">
-
+    <>
       <PageHeader
         title="Create Event"
-        subtitle="Create a new campus event."
+        description="Create a new campus event."
         action={
-          <button
-            className="secondary-button"
-            onClick={() =>
-              navigate("/events")
-            }
+          <Link
+            to="/events"
+            className="btn btn-secondary"
           >
             ← Back
-          </button>
+          </Link>
         }
       />
 
-      <div className="form-card">
+      <ErrorBox message={error} />
 
-        <form
-          className="form"
-          onSubmit={submit}
-        >
-
+      <div className="panel form-panel">
+        <form onSubmit={submit}>
           <div className="form-grid">
-
             <div className="form-group full">
-              <label>
-                Event Title
-              </label>
+              <label>Event Title *</label>
 
               <input
                 value={form.title}
@@ -1761,12 +1038,9 @@ function CreateEvent() {
             </div>
 
             <div className="form-group full">
-              <label>
-                Description
-              </label>
+              <label>Description</label>
 
               <textarea
-                rows="5"
                 value={form.description}
                 onChange={(e) =>
                   updateField(
@@ -1774,14 +1048,12 @@ function CreateEvent() {
                     e.target.value
                   )
                 }
-                placeholder="Describe the event..."
+                placeholder="Describe your event..."
               />
             </div>
 
             <div className="form-group">
-              <label>
-                Date
-              </label>
+              <label>Date *</label>
 
               <input
                 type="date"
@@ -1797,9 +1069,7 @@ function CreateEvent() {
             </div>
 
             <div className="form-group">
-              <label>
-                Time
-              </label>
+              <label>Time *</label>
 
               <input
                 type="time"
@@ -1815,9 +1085,7 @@ function CreateEvent() {
             </div>
 
             <div className="form-group">
-              <label>
-                Venue
-              </label>
+              <label>Venue *</label>
 
               <input
                 value={form.venue}
@@ -1833,9 +1101,7 @@ function CreateEvent() {
             </div>
 
             <div className="form-group">
-              <label>
-                Capacity
-              </label>
+              <label>Capacity *</label>
 
               <input
                 type="number"
@@ -1847,14 +1113,12 @@ function CreateEvent() {
                     e.target.value
                   )
                 }
-                placeholder="250"
+                required
               />
             </div>
 
             <div className="form-group">
-              <label>
-                Club
-              </label>
+              <label>Club</label>
 
               <select
                 value={form.clubId}
@@ -1866,7 +1130,7 @@ function CreateEvent() {
                 }
               >
                 <option value="">
-                  Independent Event
+                  Independent
                 </option>
 
                 {clubs.map((club) => (
@@ -1878,17 +1142,10 @@ function CreateEvent() {
                   </option>
                 ))}
               </select>
-
-              <small>
-                The selected club will be
-                associated with this event.
-              </small>
             </div>
 
             <div className="form-group">
-              <label>
-                Status
-              </label>
+              <label>Status</label>
 
               <select
                 value={form.status}
@@ -1906,350 +1163,640 @@ function CreateEvent() {
                 <option value="draft">
                   Draft
                 </option>
-
-                <option value="closed">
-                  Closed
-                </option>
               </select>
             </div>
 
+            <div className="form-group full">
+              <label>Registration Slug</label>
+
+              <input
+                value={form.slug}
+                onChange={(e) =>
+                  updateField(
+                    "slug",
+                    e.target.value
+                  )
+                }
+                placeholder="Leave blank to generate automatically"
+              />
+
+              <small className="field-help">
+                This can be used for the public
+                registration URL.
+              </small>
+            </div>
           </div>
 
           <div className="form-actions">
-
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() =>
-                navigate("/events")
-              }
+            <Link
+              to="/events"
+              className="btn btn-secondary"
             >
               Cancel
-            </button>
+            </Link>
 
             <button
-              type="submit"
-              className="primary-button"
-              disabled={loading}
+              className="btn btn-primary"
+              disabled={saving}
             >
-              {loading
-                ? "Creating..."
-                : "Create Event"}
+              {saving ? "Creating..." : "Create Event"}
             </button>
+          </div>
+        </form>
+      </div>
+    </>
+  );
+}
 
+/* =========================================================
+   REGISTRATION FORM CARD
+========================================================= */
+
+function RegistrationFormCard({ eventId }) {
+  const [form, setForm] = useState(null);
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    async function loadForm() {
+      try {
+        setLoading(true);
+        setError("");
+
+        let result = null;
+
+        /*
+          First:
+          GET /events/:eventId/form
+
+          This is the preferred route.
+        */
+        try {
+          result = await apiFetch(
+            `/events/${eventId}/form`
+          );
+        } catch {
+          /*
+            Fallback:
+            GET /forms?eventId=...
+          */
+          const formsResponse = await apiFetch(
+            `/forms?eventId=${encodeURIComponent(
+              eventId
+            )}`
+          );
+
+          const forms = arrayFromResponse(
+            formsResponse,
+            ["forms", "data"]
+          );
+
+          result =
+            forms.find(
+              (item) =>
+                item.eventId === eventId
+            ) || null;
+        }
+
+        const actualForm =
+          result?.form ||
+          result?.data ||
+          result ||
+          null;
+
+        if (
+          actualForm &&
+          actualForm.eventId &&
+          actualForm.eventId !== eventId
+        ) {
+          setForm(null);
+        } else {
+          setForm(actualForm);
+        }
+      } catch (err) {
+        console.error(
+          "Registration form loading error:",
+          err
+        );
+
+        setError(err.message);
+        setForm(null);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    if (eventId) {
+      loadForm();
+    }
+  }, [eventId]);
+
+  if (loading) {
+    return (
+      <div className="registration-form-card">
+        <div className="registration-form-main">
+          <div className="registration-form-icon">
+            📝
           </div>
 
-        </form>
+          <div>
+            <h3>Registration Form</h3>
+            <p>
+              Loading registration form...
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
+  if (!form) {
+    return (
+      <div className="registration-form-card">
+        <div className="registration-form-main">
+          <div className="registration-form-icon empty">
+            📝
+          </div>
+
+          <div className="registration-form-content">
+            <span className="registration-form-label">
+              REGISTRATION FORM
+            </span>
+
+            <h3>
+              No registration form found
+            </h3>
+
+            <p>
+              A registration form has not been
+              created for this event yet.
+            </p>
+
+            {error && (
+              <small className="form-load-error">
+                {error}
+              </small>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /*
+    IMPORTANT:
+    Use the Vercel/public frontend origin,
+    not the backend API origin.
+  */
+  const slug =
+    form.slug ||
+    form.formSlug ||
+    form.registrationSlug;
+
+  const registrationLink = slug
+    ? `${window.location.origin}/register/${slug}`
+    : null;
+
+  async function copyLink() {
+    if (!registrationLink) return;
+
+    try {
+      await navigator.clipboard.writeText(
+        registrationLink
+      );
+
+      setCopied(true);
+
+      setTimeout(() => {
+        setCopied(false);
+      }, 2000);
+    } catch (err) {
+      console.error(
+        "Copy failed:",
+        err
+      );
+    }
+  }
+
+  return (
+    <div className="registration-form-card">
+      <div className="registration-form-main">
+        <div className="registration-form-icon">
+          📝
+        </div>
+
+        <div className="registration-form-content">
+          <span className="registration-form-label">
+            REGISTRATION FORM
+          </span>
+
+          <h3>
+            {form.title ||
+              "Event Registration Form"}
+          </h3>
+
+          {form.description && (
+            <p>{form.description}</p>
+          )}
+
+          {registrationLink ? (
+            <div className="registration-link-box">
+              <span>
+                {registrationLink}
+              </span>
+            </div>
+          ) : (
+            <p className="form-load-error">
+              This form does not have a slug.
+            </p>
+          )}
+        </div>
       </div>
 
+      {registrationLink && (
+        <div className="registration-form-actions">
+          <button
+            className="btn btn-secondary"
+            onClick={copyLink}
+          >
+            {copied
+              ? "✓ Copied"
+              : "Copy Link"}
+          </button>
+
+          <a
+            href={registrationLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn btn-primary"
+          >
+            Open Registration Form ↗
+          </a>
+        </div>
+      )}
     </div>
   );
 }
 
 /* =========================================================
-   EVENT DETAILS
+   EVENT DETAIL
 ========================================================= */
 
-function EventDetails() {
-  const { eventId } =
-    useParams();
+function EventDetail() {
+  const { eventId } = useParams();
+  const navigate = useNavigate();
 
-  const [event, setEvent] =
-    useState(null);
-
+  const [event, setEvent] = useState(null);
   const [registrations, setRegistrations] =
     useState([]);
 
-  const [loading, setLoading] =
-    useState(true);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const [
-          eventResponse,
-          registrationsResponse,
-        ] = await Promise.all([
-          apiFetch(
-            `/events/${eventId}`
-          ),
-          apiFetch(
-            "/registrations"
-          ),
-        ]);
+  async function loadData() {
+    try {
+      setLoading(true);
+      setError("");
 
-        setEvent(
-          eventResponse.event ||
-            eventResponse.data ||
-            eventResponse
+      const eventResponse = await apiFetch(
+        `/events/${eventId}`
+      );
+
+      let actualEvent =
+        eventResponse?.event ||
+        eventResponse?.data ||
+        eventResponse;
+
+      /*
+        Some backends return an array.
+      */
+      if (Array.isArray(eventResponse)) {
+        actualEvent = eventResponse.find(
+          (item) => item.id === eventId
+        );
+      }
+
+      setEvent(actualEvent);
+
+      /*
+        IMPORTANT:
+        Event details fetches registrations
+        specifically for THIS event.
+      */
+      const registrationsResponse =
+        await apiFetch(
+          `/registrations?eventId=${encodeURIComponent(
+            eventId
+          )}`
         );
 
+      const registrationList =
+        arrayFromResponse(
+          registrationsResponse,
+          ["registrations", "data"]
+        );
+
+      setRegistrations(registrationList);
+    } catch (err) {
+      /*
+        Fallback for APIs that do not support
+        eventId filtering.
+      */
+      try {
+        const allRegistrationsResponse =
+          await apiFetch("/registrations");
+
         const allRegistrations =
-          getArray(
-            registrationsResponse,
-            ["registrations"]
+          arrayFromResponse(
+            allRegistrationsResponse,
+            ["registrations", "data"]
           );
 
         setRegistrations(
           allRegistrations.filter(
             (registration) =>
-              getEventId(
-                registration
-              ) === eventId
+              registration.eventId === eventId
           )
         );
-      } catch (error) {
-        console.error(error);
-      } finally {
-        setLoading(false);
+      } catch {
+        setError(err.message);
       }
-    };
+    } finally {
+      setLoading(false);
+    }
+  }
 
-    load();
+  useEffect(() => {
+    loadData();
   }, [eventId]);
 
-  if (loading) {
-    return (
-      <div className="page">
-        <div className="loading-box">
-          Loading event...
-        </div>
-      </div>
-    );
-  }
+  if (loading) return <Loading />;
 
   if (!event) {
     return (
-      <div className="page">
-        <div className="empty-card">
-          <h2>
-            Event not found
-          </h2>
-
-          <Link
-            to="/events"
-            className="primary-button"
-          >
-            Back to Events
-          </Link>
-        </div>
-      </div>
+      <EmptyState
+        title="Event not found"
+        text="The requested event could not be found."
+      />
     );
   }
 
   return (
-    <div className="page">
-
+    <>
       <PageHeader
         title={event.title}
-        subtitle={
+        description={
           event.description ||
-          "Event details"
+          "Campus event details"
         }
         action={
-          <Link
-            to="/events"
-            className="secondary-button"
+          <button
+            className="btn btn-secondary"
+            onClick={() => navigate("/events")}
           >
             ← Back
-          </Link>
+          </button>
         }
       />
 
-      <div className="event-detail-grid">
+      <ErrorBox message={error} />
 
-        <div className="content-card">
-
-          <div className="detail-content">
-
-            <div className="detail-item">
-              <span>
-                Date
-              </span>
-
-              <strong>
-                {formatDate(
-                  event.date
-                )}
-              </strong>
-            </div>
-
-            <div className="detail-item">
-              <span>
-                Time
-              </span>
-
-              <strong>
-                {event.time || "-"}
-              </strong>
-            </div>
-
-            <div className="detail-item">
-              <span>
-                Venue
-              </span>
-
-              <strong>
-                {event.venue || "-"}
-              </strong>
-            </div>
-
-            <div className="detail-item">
-              <span>
-                Club
-              </span>
-
-              <strong>
-                {event.clubName ||
-                  "Independent"}
-              </strong>
-            </div>
-
-            <div className="detail-item">
-              <span>
-                Capacity
-              </span>
-
-              <strong>
-                {event.capacity || "-"}
-              </strong>
-            </div>
-
-            <div className="detail-item">
-              <span>
-                Registrations
-              </span>
-
-              <strong>
-                {registrations.length}
-              </strong>
-            </div>
-
-          </div>
-
+      <div className="event-detail-card">
+        <div className="event-detail-item">
+          <span>Date</span>
+          <strong>
+            {formatDate(event.date)}
+          </strong>
         </div>
 
+        <div className="event-detail-item">
+          <span>Time</span>
+          <strong>
+            {event.time || "-"}
+          </strong>
+        </div>
+
+        <div className="event-detail-item">
+          <span>Venue</span>
+          <strong>
+            {event.venue || "-"}
+          </strong>
+        </div>
+
+        <div className="event-detail-item">
+          <span>Club</span>
+          <strong>
+            {event.clubName || "Independent"}
+          </strong>
+        </div>
+
+        <div className="event-detail-item">
+          <span>Capacity</span>
+          <strong>
+            {event.capacity || "-"}
+          </strong>
+        </div>
+
+        <div className="event-detail-item">
+          <span>Registrations</span>
+          <strong>
+            {registrations.length}
+          </strong>
+        </div>
       </div>
 
-      <div className="content-card">
+      {/* REGISTRATION FORM LINK */}
+      <RegistrationFormCard
+        eventId={eventId}
+      />
 
-        <div className="content-card-header">
-
+      <section className="panel registered-panel">
+        <div className="panel-header">
           <div>
-            <h2>
-              Registered Students
-            </h2>
-
+            <h2>Registered Students</h2>
             <p>
-              Students registered for
-              this event.
+              Students registered for this event.
             </p>
           </div>
 
           <Link
-            to="/participation"
-            className="primary-button"
+            to={`/participation?eventId=${eventId}`}
+            className="btn btn-primary"
           >
             Manage Attendance
           </Link>
-
         </div>
 
-        <div className="table-wrapper">
+        {registrations.length === 0 ? (
+          <EmptyState
+            title="No registrations"
+            text="No students have registered for this event yet."
+          />
+        ) : (
+          <RegistrationTable
+            registrations={registrations}
+          />
+        )}
+      </section>
+    </>
+  );
+}
 
-          <table className="data-table">
+/* =========================================================
+   REGISTRATION TABLE
+========================================================= */
 
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Phone</th>
-                <th>College</th>
-                <th>Registered</th>
-              </tr>
-            </thead>
+function getRegistrationValue(
+  registration,
+  keys
+) {
+  for (const key of keys) {
+    if (
+      registration?.[key] !== undefined &&
+      registration?.[key] !== null &&
+      registration?.[key] !== ""
+    ) {
+      return registration[key];
+    }
 
-            <tbody>
+    if (
+      registration?.data?.[key] !== undefined &&
+      registration?.data?.[key] !== null &&
+      registration?.data?.[key] !== ""
+    ) {
+      return registration.data[key];
+    }
+  }
 
-              {registrations.length ===
-              0 ? (
-                <tr>
-                  <td
-                    colSpan="6"
-                    className="table-empty"
-                  >
-                    No registrations yet.
-                  </td>
-                </tr>
-              ) : (
-                registrations.map(
-                  (
-                    registration,
+  return "-";
+}
+
+function RegistrationTable({
+  registrations,
+  attendance = false,
+  onPresent,
+  onAbsent,
+}) {
+  return (
+    <div className="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>NAME</th>
+            <th>EMAIL</th>
+            <th>PHONE</th>
+            <th>COLLEGE</th>
+            <th>REGISTERED</th>
+            {attendance && (
+              <th>ATTENDANCE</th>
+            )}
+          </tr>
+        </thead>
+
+        <tbody>
+          {registrations.map(
+            (registration, index) => {
+              const name =
+                getRegistrationValue(
+                  registration,
+                  ["name", "fullName"]
+                );
+
+              const email =
+                getRegistrationValue(
+                  registration,
+                  ["email"]
+                );
+
+              const phone =
+                getRegistrationValue(
+                  registration,
+                  ["phone", "mobile"]
+                );
+
+              const college =
+                getRegistrationValue(
+                  registration,
+                  ["college"]
+                );
+
+              const registered =
+                registration.submittedAt ||
+                registration.createdAt;
+
+              return (
+                <tr
+                  key={
+                    registration.id ||
+                    registration.registrationId ||
                     index
-                  ) => (
-                    <tr
-                      key={
-                        getRegistrationId(
-                          registration
-                        ) ||
-                        index
-                      }
-                    >
-                      <td>
-                        {index + 1}
-                      </td>
+                  }
+                >
+                  <td>{index + 1}</td>
 
-                      <td>
-                        <strong>
-                          {getStudentValue(
-                            registration,
-                            "name"
-                          )}
-                        </strong>
-                      </td>
+                  <td>
+                    <strong>{name}</strong>
+                  </td>
 
-                      <td>
-                        {getStudentValue(
-                          registration,
-                          "email"
-                        )}
-                      </td>
+                  <td>{email}</td>
 
-                      <td>
-                        {getStudentValue(
-                          registration,
-                          "phone"
-                        )}
-                      </td>
+                  <td>{phone}</td>
 
-                      <td>
-                        {getStudentValue(
-                          registration,
-                          "college"
-                        )}
-                      </td>
+                  <td>{college}</td>
 
-                      <td>
-                        {formatDateTime(
-                          registration.submittedAt ||
-                            registration.createdAt
-                        )}
-                      </td>
-                    </tr>
-                  )
-                )
-              )}
+                  <td>
+                    {formatDateTime(
+                      registered
+                    )}
+                  </td>
 
-            </tbody>
+                  {attendance && (
+                    <td>
+                      <div className="attendance-actions">
+                        <button
+                          className={`attendance-btn present ${
+                            registration.attendanceStatus ===
+                            "present"
+                              ? "selected"
+                              : ""
+                          }`}
+                          onClick={() =>
+                            onPresent(
+                              registration
+                            )
+                          }
+                        >
+                          ✓ Present
+                        </button>
 
-          </table>
-
-        </div>
-
-      </div>
-
+                        <button
+                          className={`attendance-btn absent ${
+                            registration.attendanceStatus ===
+                            "absent"
+                              ? "selected"
+                              : ""
+                          }`}
+                          onClick={() =>
+                            onAbsent(
+                              registration
+                            )
+                          }
+                        >
+                          ✕ Absent
+                        </button>
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              );
+            }
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -2259,697 +1806,494 @@ function EventDetails() {
 ========================================================= */
 
 function Participation() {
+  const [events, setEvents] = useState([]);
+
+  const [selectedEventId, setSelectedEventId] =
+    useState("");
+
   const [registrations, setRegistrations] =
     useState([]);
 
-  const [loading, setLoading] =
-    useState(true);
+  const [loading, setLoading] = useState(true);
+  const [loadingRegistrations, setLoadingRegistrations] =
+    useState(false);
 
-  const [savingId, setSavingId] =
-    useState(null);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
 
-  const [message, setMessage] =
-    useState("");
+  const queryEventId =
+    new URLSearchParams(window.location.search).get(
+      "eventId"
+    );
 
-  const [error, setError] =
-    useState("");
-
-  const loadRegistrations = async () => {
+  async function loadEvents() {
     try {
-      setLoading(true);
-      setError("");
-      setMessage("");
-
-      /*
-       * IMPORTANT:
-       *
-       * Participation is populated from
-       * registrations.
-       *
-       * We do NOT ask the admin to select
-       * an event.
-       */
-
       const response =
-        await apiFetch(
-          "/registrations"
-        );
+        await apiFetch("/events");
 
-      const list = getArray(
-        response,
-        ["registrations"]
-      );
+      const eventList =
+        arrayFromResponse(response, [
+          "events",
+          "data",
+        ]);
 
-      setRegistrations(list);
+      setEvents(eventList);
+
+      if (queryEventId) {
+        setSelectedEventId(queryEventId);
+      } else if (eventList.length > 0) {
+        setSelectedEventId(eventList[0].id);
+      }
     } catch (err) {
-      console.error(
-        "Participation error:",
-        err
-      );
-
-      setError(
-        err.message ||
-          "Failed to load registrations."
-      );
+      setError(err.message);
     } finally {
       setLoading(false);
     }
-  };
+  }
+
+  async function loadRegistrations(
+    eventId
+  ) {
+    if (!eventId) {
+      setRegistrations([]);
+      return;
+    }
+
+    try {
+      setLoadingRegistrations(true);
+      setError("");
+
+      /*
+        Participation is based on registrations.
+        We fetch only registrations belonging
+        to the selected event.
+      */
+      let response;
+
+      try {
+        response = await apiFetch(
+          `/registrations?eventId=${encodeURIComponent(
+            eventId
+          )}`
+        );
+      } catch {
+        response =
+          await apiFetch("/registrations");
+      }
+
+      let registrationList =
+        arrayFromResponse(response, [
+          "registrations",
+          "data",
+        ]);
+
+      /*
+        Safety filter.
+        This prevents registrations from another
+        event appearing on the Participation page.
+      */
+      registrationList =
+        registrationList.filter(
+          (registration) =>
+            registration.eventId === eventId
+        );
+
+      /*
+        Some backend implementations return
+        participation status with registration.
+      */
+      setRegistrations(
+        registrationList.map(
+          (registration) => ({
+            ...registration,
+            attendanceStatus:
+              registration.attendanceStatus ||
+              registration.status ||
+              "pending",
+          })
+        )
+      );
+    } catch (err) {
+      setError(err.message);
+      setRegistrations([]);
+    } finally {
+      setLoadingRegistrations(false);
+    }
+  }
 
   useEffect(() => {
-    loadRegistrations();
+    loadEvents();
   }, []);
 
-  const getStatus = (
-    registration
-  ) => {
-    return String(
-      registration.participationStatus ||
-        registration.attendanceStatus ||
-        registration.status ||
-        "pending"
-    ).toLowerCase();
-  };
+  useEffect(() => {
+    if (selectedEventId) {
+      loadRegistrations(
+        selectedEventId
+      );
+    }
+  }, [selectedEventId]);
 
-  const markAttendance = async (
+  async function updateAttendance(
     registration,
     status
-  ) => {
+  ) {
     const registrationId =
-      getRegistrationId(
-        registration
-      );
-
-    /*
-     * THIS IS THE IMPORTANT PART.
-     *
-     * eventId is taken directly from
-     * the registration document.
-     */
-    const eventId =
-      getEventId(registration);
+      registration.id ||
+      registration.registrationId;
 
     if (!registrationId) {
-      alert(
+      setError(
         "Registration ID is missing."
       );
       return;
     }
 
-    if (!eventId) {
-      console.error(
-        "Registration without eventId:",
-        registration
+    if (!selectedEventId) {
+      setError(
+        "Event ID is missing."
       );
-
-      alert(
-        "eventId is missing from this registration. Please check the registration document in Firestore."
-      );
-
       return;
     }
 
     try {
-      setSavingId(registrationId);
       setError("");
       setMessage("");
 
       /*
-       * Backend receives:
-       *
-       * {
-       *   registrationId,
-       *   eventId,
-       *   status
-       * }
-       */
-
-      await apiFetch(
-        "/participation",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            registrationId,
-            eventId,
-            status,
-          }),
-        }
-      );
-
-      /*
-       * Immediately update the UI.
-       */
+        IMPORTANT:
+        eventId is explicitly sent here.
+      */
+      await apiFetch("/participation", {
+        method: "POST",
+        body: JSON.stringify({
+          registrationId,
+          eventId: selectedEventId,
+          status,
+        }),
+      });
 
       setRegistrations(
         (previous) =>
-          previous.map(
-            (student) => {
-              const id =
-                getRegistrationId(
-                  student
-                );
+          previous.map((item) => {
+            const itemId =
+              item.id ||
+              item.registrationId;
 
-              if (
-                id ===
-                registrationId
-              ) {
-                return {
-                  ...student,
-
-                  participationStatus:
-                    status,
-
-                  attendanceStatus:
-                    status,
-                };
-              }
-
-              return student;
+            if (itemId === registrationId) {
+              return {
+                ...item,
+                attendanceStatus:
+                  status,
+              };
             }
-          )
-      );
 
-      const studentName =
-        getStudentValue(
-          registration,
-          "name"
-        );
+            return item;
+          })
+      );
 
       setMessage(
-        `${studentName} marked as ${status}.`
-      );
-    } catch (err) {
-      console.error(
-        "Attendance update failed:",
-        err
+        `Attendance marked ${status}.`
       );
 
-      setError(
-        err.message ||
-          "Failed to update attendance."
-      );
-    } finally {
-      setSavingId(null);
+      setTimeout(() => {
+        setMessage("");
+      }, 2500);
+    } catch (err) {
+      setError(err.message);
     }
-  };
+  }
+
+  const selectedEvent = events.find(
+    (event) =>
+      event.id === selectedEventId
+  );
 
   const presentCount =
     registrations.filter(
-      (student) =>
-        getStatus(student) ===
+      (item) =>
+        item.attendanceStatus ===
         "present"
     ).length;
 
   const absentCount =
     registrations.filter(
-      (student) =>
-        getStatus(student) ===
+      (item) =>
+        item.attendanceStatus ===
         "absent"
     ).length;
 
   const pendingCount =
-    registrations.filter(
-      (student) =>
-        getStatus(student) ===
-        "pending"
-    ).length;
+    registrations.length -
+    presentCount -
+    absentCount;
+
+  if (loading) return <Loading />;
 
   return (
-    <div className="page">
-
+    <>
       <PageHeader
         title="Participation"
-        subtitle="Manage attendance directly from registered students."
-        action={
-          <button
-            className="secondary-button"
-            onClick={
-              loadRegistrations
-            }
-          >
-            ↻ Refresh
-          </button>
-        }
+        description="Manage event registrations and attendance."
       />
 
+      <ErrorBox message={error} />
+
       {message && (
-        <div className="success-message">
+        <div className="success-box">
           ✓ {message}
         </div>
       )}
 
-      {error && (
-        <div className="error-message page-error">
-          {error}
+      <div className="participation-toolbar">
+        <div className="event-selector">
+          <label>Select Event</label>
+
+          <select
+            value={selectedEventId}
+            onChange={(e) =>
+              setSelectedEventId(
+                e.target.value
+              )
+            }
+          >
+            <option value="">
+              Select an event
+            </option>
+
+            {events.map((event) => (
+              <option
+                key={event.id}
+                value={event.id}
+              >
+                {event.title}
+              </option>
+            ))}
+          </select>
         </div>
-      )}
 
-      <div className="stats-grid">
+        {selectedEvent && (
+          <div className="selected-event-info">
+            <strong>
+              {selectedEvent.title}
+            </strong>
 
-        <StatCard
-          title="Total Registered"
-          value={
-            registrations.length
-          }
-          icon="♙"
-        />
-
-        <StatCard
-          title="Present"
-          value={presentCount}
-          icon="✓"
-        />
-
-        <StatCard
-          title="Absent"
-          value={absentCount}
-          icon="×"
-        />
-
-        <StatCard
-          title="Pending"
-          value={pendingCount}
-          icon="○"
-        />
-
+            <span>
+              {formatDate(
+                selectedEvent.date
+              )}
+            </span>
+          </div>
+        )}
       </div>
 
-      <div className="content-card">
+      <div className="attendance-stats">
+        <div className="attendance-stat">
+          <span>Total Registered</span>
+          <strong>
+            {registrations.length}
+          </strong>
+        </div>
 
-        <div className="content-card-header">
+        <div className="attendance-stat present-stat">
+          <span>Present</span>
+          <strong>{presentCount}</strong>
+        </div>
 
+        <div className="attendance-stat absent-stat">
+          <span>Absent</span>
+          <strong>{absentCount}</strong>
+        </div>
+
+        <div className="attendance-stat pending-stat">
+          <span>Pending</span>
+          <strong>{pendingCount}</strong>
+        </div>
+      </div>
+
+      <section className="panel">
+        <div className="panel-header">
           <div>
-            <h2>
-              Registered Students
-            </h2>
-
+            <h2>Registered Students</h2>
             <p>
-              These students are
-              fetched directly from
-              the registration
-              collection.
+              Students are fetched directly from
+              the registration collection.
             </p>
           </div>
 
           <button
-            className="secondary-button"
-            onClick={
-              loadRegistrations
+            className="btn btn-secondary"
+            onClick={() =>
+              loadRegistrations(
+                selectedEventId
+              )
             }
           >
             Refresh
           </button>
-
         </div>
 
-        {loading ? (
-          <div className="empty-state">
-            Loading registrations...
-          </div>
-        ) : registrations.length ===
-          0 ? (
-          <div className="empty-state">
-            No students have
-            registered yet.
-          </div>
+        {loadingRegistrations ? (
+          <Loading />
+        ) : registrations.length === 0 ? (
+          <EmptyState
+            title="No registrations"
+            text="No students have registered for this event."
+          />
         ) : (
-          <div className="table-wrapper">
-
-            <table className="data-table">
-
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Name</th>
-                  <th>Email</th>
-                  <th>Phone</th>
-                  <th>College</th>
-                  <th>Event</th>
-                  <th>Registered</th>
-                  <th>Status</th>
-                  <th>Attendance</th>
-                </tr>
-              </thead>
-
-              <tbody>
-
-                {registrations.map(
-                  (
-                    student,
-                    index
-                  ) => {
-                    const registrationId =
-                      getRegistrationId(
-                        student
-                      );
-
-                    const status =
-                      getStatus(
-                        student
-                      );
-
-                    return (
-                      <tr
-                        key={
-                          registrationId ||
-                          index
-                        }
-                      >
-
-                        <td>
-                          {index + 1}
-                        </td>
-
-                        <td>
-                          <strong>
-                            {getStudentValue(
-                              student,
-                              "name"
-                            )}
-                          </strong>
-                        </td>
-
-                        <td>
-                          {getStudentValue(
-                            student,
-                            "email"
-                          )}
-                        </td>
-
-                        <td>
-                          {getStudentValue(
-                            student,
-                            "phone"
-                          )}
-                        </td>
-
-                        <td>
-                          {getStudentValue(
-                            student,
-                            "college"
-                          )}
-                        </td>
-
-                        <td>
-                          <span className="event-name-cell">
-                            {student.eventName ||
-                              student.event?.title ||
-                              student.eventTitle ||
-                              student.eventId ||
-                              "-"}
-                          </span>
-                        </td>
-
-                        <td>
-                          {formatDateTime(
-                            student.submittedAt ||
-                              student.createdAt ||
-                              student.registrationDate
-                          )}
-                        </td>
-
-                        <td>
-                          <span
-                            className={`status-badge ${status}`}
-                          >
-                            {status ===
-                            "present"
-                              ? "Present"
-                              : status ===
-                                "absent"
-                              ? "Absent"
-                              : "Pending"}
-                          </span>
-                        </td>
-
-                        <td>
-                          <div className="attendance-actions">
-
-                            <button
-                              className={`attendance-button present-button ${
-                                status ===
-                                "present"
-                                  ? "active"
-                                  : ""
-                              }`}
-                              disabled={
-                                savingId ===
-                                registrationId
-                              }
-                              onClick={() =>
-                                markAttendance(
-                                  student,
-                                  "present"
-                                )
-                              }
-                            >
-                              ✓ Present
-                            </button>
-
-                            <button
-                              className={`attendance-button absent-button ${
-                                status ===
-                                "absent"
-                                  ? "active"
-                                  : ""
-                              }`}
-                              disabled={
-                                savingId ===
-                                registrationId
-                              }
-                              onClick={() =>
-                                markAttendance(
-                                  student,
-                                  "absent"
-                                )
-                              }
-                            >
-                              ✕ Absent
-                            </button>
-
-                          </div>
-                        </td>
-
-                      </tr>
-                    );
-                  }
-                )}
-
-              </tbody>
-
-            </table>
-
-          </div>
+          <RegistrationTable
+            registrations={
+              registrations
+            }
+            attendance
+            onPresent={(registration) =>
+              updateAttendance(
+                registration,
+                "present"
+              )
+            }
+            onAbsent={(registration) =>
+              updateAttendance(
+                registration,
+                "absent"
+              )
+            }
+          />
         )}
-
-      </div>
-
-    </div>
+      </section>
+    </>
   );
 }
 
 /* =========================================================
-   PUBLIC REGISTRATION
+   PUBLIC REGISTRATION PAGE
 ========================================================= */
 
 function PublicRegistration() {
-  const { slug } =
-    useParams();
+  const { slug } = useParams();
 
-  const [form, setForm] =
-    useState(null);
-
-  const [event, setEvent] =
-    useState(null);
-
-  const [values, setValues] =
-    useState({});
-
+  const [form, setForm] = useState(null);
   const [loading, setLoading] =
     useState(true);
 
   const [submitting, setSubmitting] =
     useState(false);
 
-  const [success, setSuccess] =
-    useState(false);
-
   const [error, setError] =
     useState("");
 
+  const [success, setSuccess] =
+    useState(false);
+
+  const [values, setValues] =
+    useState({});
+
   useEffect(() => {
-    const load = async () => {
+    async function loadForm() {
       try {
         setLoading(true);
 
-        const formsResponse =
+        const response =
           await apiFetch("/forms");
 
-        const forms = getArray(
-          formsResponse,
-          ["forms"]
-        );
-
-        const foundForm =
-          forms.find(
-            (item) =>
-              item.slug === slug
+        const forms =
+          arrayFromResponse(
+            response,
+            ["forms", "data"]
           );
 
-        if (!foundForm) {
+        const found = forms.find(
+          (item) =>
+            item.slug === slug ||
+            item.formSlug === slug
+        );
+
+        if (!found) {
           throw new Error(
             "Registration form not found."
           );
         }
 
-        setForm(foundForm);
-
-        if (foundForm.eventId) {
-          try {
-            const eventResponse =
-              await apiFetch(
-                `/events/${foundForm.eventId}`
-              );
-
-            setEvent(
-              eventResponse.event ||
-                eventResponse.data ||
-                eventResponse
-            );
-          } catch {
-            // Event details are optional
-          }
-        }
+        setForm(found);
 
         const initialValues = {};
 
-        (
-          foundForm.fields || []
-        ).forEach((field) => {
-          initialValues[
-            field.fieldId
-          ] =
-            field.type ===
-            "checkbox"
+        (found.fields || []).forEach(
+          (field) => {
+            initialValues[
+              field.fieldId
+            ] = field.type === "checkbox"
               ? []
               : "";
-        });
-
-        setValues(
-          initialValues
+          }
         );
+
+        setValues(initialValues);
       } catch (err) {
-        console.error(err);
-
-        setError(
-          err.message ||
-            "Failed to load registration form."
-        );
+        setError(err.message);
       } finally {
         setLoading(false);
       }
-    };
+    }
 
-    load();
+    loadForm();
   }, [slug]);
 
-  const updateValue = (
+  function updateValue(
     field,
     value
-  ) => {
+  ) {
     setValues((previous) => ({
       ...previous,
-      [field.fieldId]:
-        value,
+      [field.fieldId]: value,
     }));
-  };
+  }
 
-  const submit = async (
-    eventObject
-  ) => {
-    eventObject.preventDefault();
+  async function submit(e) {
+    e.preventDefault();
 
-    if (!form?.eventId) {
-      setError(
-        "This registration form does not have an eventId."
-      );
-
-      return;
-    }
+    if (!form) return;
 
     try {
       setSubmitting(true);
       setError("");
 
-      await apiFetch(
-        "/registrations",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            eventId:
-              form.eventId,
+      await apiFetch("/registrations", {
+        method: "POST",
+        body: JSON.stringify({
+          eventId: form.eventId,
+          formId: form.id,
+          data: values,
 
-            formId:
-              form.id ||
-              form.formId,
-
-            data: values,
-
-            name:
-              values.name ||
-              values.fullName ||
-              "",
-
-            email:
-              values.email ||
-              "",
-
-            phone:
-              values.phone ||
-              "",
-
-            college:
-              values.college ||
-              "",
-          }),
-        }
-      );
+          /*
+            These are also included for
+            compatibility with the current
+            backend/frontend data model.
+          */
+          name:
+            values.name ||
+            values.fullName ||
+            "",
+          email:
+            values.email || "",
+          phone:
+            values.phone || "",
+          college:
+            values.college || "",
+        }),
+      });
 
       setSuccess(true);
     } catch (err) {
-      console.error(err);
-
-      setError(
-        err.message ||
-          "Registration failed."
-      );
+      setError(err.message);
     } finally {
       setSubmitting(false);
     }
-  };
+  }
 
   if (loading) {
     return (
       <div className="public-page">
-        <div className="public-card">
-          Loading registration form...
-        </div>
-      </div>
-    );
-  }
-
-  if (error && !form) {
-    return (
-      <div className="public-page">
-        <div className="public-card">
-          <h1>
-            Registration unavailable
-          </h1>
-
-          <p className="error-text">
-            {error}
-          </p>
-        </div>
+        <Loading />
       </div>
     );
   }
@@ -2957,327 +2301,328 @@ function PublicRegistration() {
   if (success) {
     return (
       <div className="public-page">
-
-        <div className="public-card success-card">
-
+        <div className="success-card">
           <div className="success-icon">
             ✓
           </div>
 
-          <h1>
-            Registration Successful
-          </h1>
+          <h1>Registration Successful</h1>
 
           <p>
-            Your registration has
-            been submitted successfully.
+            Your registration has been
+            successfully submitted.
           </p>
 
           <p>
-            A confirmation email will
-            be sent to your registered
-            email address.
+            A confirmation email will be
+            sent if email delivery is
+            configured.
           </p>
-
         </div>
-
       </div>
     );
   }
 
   return (
     <div className="public-page">
-
-      <div className="public-card">
-
-        <div className="public-brand">
-          <div className="brand-icon">
+      <div className="public-form-card">
+        <div className="public-form-header">
+          <div className="public-logo">
             N
           </div>
 
-          <strong>
-            NexusCampus
-          </strong>
+          <h1>{form?.title}</h1>
+
+          {form?.description && (
+            <p>{form.description}</p>
+          )}
         </div>
 
-        {event && (
-          <div className="public-event">
-
-            <h1>
-              {event.title}
-            </h1>
-
-            <p>
-              {event.description}
-            </p>
-
-            <div className="public-event-meta">
-
-              <span>
-                📅{" "}
-                {formatDate(
-                  event.date
-                )}
-              </span>
-
-              <span>
-                🕐 {event.time}
-              </span>
-
-              <span>
-                📍 {event.venue}
-              </span>
-
-            </div>
-
-          </div>
-        )}
-
-        <div className="public-form-heading">
-
-          <h2>
-            {form.title}
-          </h2>
-
-          <p>
-            {form.description}
-          </p>
-
-        </div>
-
-        {error && (
-          <div className="error-message">
-            {error}
-          </div>
-        )}
+        <ErrorBox message={error} />
 
         <form
-          className="form public-form"
+          className="public-form"
           onSubmit={submit}
         >
+          {(form?.fields || []).map(
+            (field) => {
+              const type =
+                field.type || "text";
 
-          {(form.fields || []).map(
-            (field) => (
-              <PublicField
-                key={
-                  field.fieldId
-                }
-                field={field}
-                value={
-                  values[
-                    field.fieldId
-                  ]
-                }
-                onChange={(value) =>
-                  updateValue(
-                    field,
-                    value
-                  )
-                }
-              />
-            )
+              return (
+                <div
+                  className="form-group"
+                  key={field.fieldId}
+                >
+                  <label>
+                    {field.label}
+
+                    {field.required && (
+                      <span className="required">
+                        *
+                      </span>
+                    )}
+                  </label>
+
+                  {type ===
+                    "textarea" && (
+                    <textarea
+                      value={
+                        values[
+                          field.fieldId
+                        ] || ""
+                      }
+                      onChange={(e) =>
+                        updateValue(
+                          field,
+                          e.target.value
+                        )
+                      }
+                      required={
+                        field.required
+                      }
+                    />
+                  )}
+
+                  {(type ===
+                    "text" ||
+                    type ===
+                      "email" ||
+                    type ===
+                      "phone" ||
+                    type ===
+                      "number" ||
+                    type ===
+                      "date" ||
+                    type ===
+                      "time") && (
+                    <input
+                      type={
+                        type ===
+                        "phone"
+                          ? "tel"
+                          : type
+                      }
+                      value={
+                        values[
+                          field.fieldId
+                        ] || ""
+                      }
+                      onChange={(e) =>
+                        updateValue(
+                          field,
+                          e.target.value
+                        )
+                      }
+                      required={
+                        field.required
+                      }
+                    />
+                  )}
+
+                  {(type ===
+                    "dropdown" ||
+                    type ===
+                      "select") && (
+                    <select
+                      value={
+                        values[
+                          field.fieldId
+                        ] || ""
+                      }
+                      onChange={(e) =>
+                        updateValue(
+                          field,
+                          e.target.value
+                        )
+                      }
+                      required={
+                        field.required
+                      }
+                    >
+                      <option value="">
+                        Select an option
+                      </option>
+
+                      {(
+                        field.options ||
+                        []
+                      ).map(
+                        (option) => (
+                          <option
+                            key={
+                              typeof option ===
+                              "string"
+                                ? option
+                                : option.value
+                            }
+                            value={
+                              typeof option ===
+                              "string"
+                                ? option
+                                : option.value
+                            }
+                          >
+                            {typeof option ===
+                            "string"
+                              ? option
+                              : option.label}
+                          </option>
+                        )
+                      )}
+                    </select>
+                  )}
+
+                  {type ===
+                    "radio" && (
+                    <div className="radio-options">
+                      {(
+                        field.options ||
+                        []
+                      ).map(
+                        (option) => {
+                          const value =
+                            typeof option ===
+                            "string"
+                              ? option
+                              : option.value;
+
+                          const label =
+                            typeof option ===
+                            "string"
+                              ? option
+                              : option.label;
+
+                          return (
+                            <label
+                              className="choice-option"
+                              key={value}
+                            >
+                              <input
+                                type="radio"
+                                name={
+                                  field.fieldId
+                                }
+                                value={value}
+                                checked={
+                                  values[
+                                    field
+                                      .fieldId
+                                  ] ===
+                                  value
+                                }
+                                onChange={() =>
+                                  updateValue(
+                                    field,
+                                    value
+                                  )
+                                }
+                                required={
+                                  field.required
+                                }
+                              />
+
+                              {label}
+                            </label>
+                          );
+                        }
+                      )}
+                    </div>
+                  )}
+
+                  {type ===
+                    "checkbox" && (
+                    <div className="checkbox-options">
+                      {(
+                        field.options ||
+                        []
+                      ).map(
+                        (option) => {
+                          const value =
+                            typeof option ===
+                            "string"
+                              ? option
+                              : option.value;
+
+                          const selected =
+                            values[
+                              field.fieldId
+                            ] || [];
+
+                          return (
+                            <label
+                              className="choice-option"
+                              key={value}
+                            >
+                              <input
+                                type="checkbox"
+                                value={value}
+                                checked={selected.includes(
+                                  value
+                                )}
+                                onChange={(e) => {
+                                  const next =
+                                    e.target
+                                      .checked
+                                      ? [
+                                          ...selected,
+                                          value,
+                                        ]
+                                      : selected.filter(
+                                          (
+                                            item
+                                          ) =>
+                                            item !==
+                                            value
+                                        );
+
+                                  updateValue(
+                                    field,
+                                    next
+                                  );
+                                }}
+                              />
+
+                              {value}
+                            </label>
+                          );
+                        }
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            }
           )}
 
           <button
-            type="submit"
-            className="primary-button full-width"
+            className="btn btn-primary public-submit"
             disabled={submitting}
           >
             {submitting
               ? "Submitting..."
               : "Submit Registration"}
           </button>
-
         </form>
-
       </div>
-
     </div>
   );
 }
 
 /* =========================================================
-   PUBLIC FIELD
+   APP
 ========================================================= */
 
-function PublicField({
-  field,
-  value,
-  onChange,
-}) {
-  const type =
-    field.type || "text";
-
-  return (
-    <div className="form-group">
-
-      <label>
-        {field.label}
-
-        {field.required && (
-          <span className="required">
-            *
-          </span>
-        )}
-      </label>
-
-      {type === "textarea" ? (
-        <textarea
-          rows="5"
-          value={value || ""}
-          onChange={(e) =>
-            onChange(
-              e.target.value
-            )
-          }
-          required={field.required}
-        />
-      ) : type ===
-        "dropdown" ||
-        type === "select" ? (
-        <select
-          value={value || ""}
-          onChange={(e) =>
-            onChange(
-              e.target.value
-            )
-          }
-          required={field.required}
-        >
-          <option value="">
-            Select...
-          </option>
-
-          {(field.options || []).map(
-            (option) => (
-              <option
-                key={option}
-                value={option}
-              >
-                {option}
-              </option>
-            )
-          )}
-        </select>
-      ) : type === "radio" ? (
-        <div className="radio-group">
-
-          {(field.options || []).map(
-            (option) => (
-              <label
-                className="radio-option"
-                key={option}
-              >
-                <input
-                  type="radio"
-                  name={
-                    field.fieldId
-                  }
-                  value={option}
-                  checked={
-                    value === option
-                  }
-                  onChange={() =>
-                    onChange(
-                      option
-                    )
-                  }
-                  required={
-                    field.required
-                  }
-                />
-
-                {option}
-              </label>
-            )
-          )}
-
-        </div>
-      ) : type === "checkbox" ? (
-        <div className="checkbox-group">
-
-          {(field.options || []).map(
-            (option) => {
-              const checked =
-                Array.isArray(
-                  value
-                ) &&
-                value.includes(
-                  option
-                );
-
-              return (
-                <label
-                  className="checkbox-option"
-                  key={option}
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => {
-                      const current =
-                        Array.isArray(
-                          value
-                        )
-                          ? value
-                          : [];
-
-                      onChange(
-                        checked
-                          ? current.filter(
-                              (
-                                item
-                              ) =>
-                                item !==
-                                option
-                            )
-                          : [
-                              ...current,
-                              option,
-                            ]
-                      );
-                    }}
-                  />
-
-                  {option}
-                </label>
-              );
-            }
-          )}
-
-        </div>
-      ) : (
-        <input
-          type={
-            type === "phone"
-              ? "tel"
-              : type
-          }
-          value={value || ""}
-          onChange={(e) =>
-            onChange(
-              e.target.value
-            )
-          }
-          required={field.required}
-        />
-      )}
-
-    </div>
-  );
-}
-
-/* =========================================================
-   PROTECTED APP
-========================================================= */
-
-function ProtectedApp({
-  user,
-}) {
+function AdminApp({ user }) {
   return (
     <Layout user={user}>
-
       <Routes>
+        <Route
+          path="/"
+          element={
+            <Dashboard />
+          }
+        />
 
         <Route
           path="/dashboard"
@@ -3288,141 +2633,116 @@ function ProtectedApp({
 
         <Route
           path="/clubs"
-          element={
-            <Clubs />
-          }
+          element={<Clubs />}
         />
 
         <Route
           path="/events"
-          element={
-            <Events />
-          }
+          element={<Events />}
         />
 
         <Route
           path="/events/new"
-          element={
-            <CreateEvent />
-          }
+          element={<CreateEvent />}
         />
 
         <Route
           path="/events/:eventId"
-          element={
-            <EventDetails />
-          }
+          element={<EventDetail />}
         />
 
         <Route
           path="/participation"
-          element={
-            <Participation />
-          }
+          element={<Participation />}
         />
-
-        <Route
-          path="*"
-          element={
-            <Navigate
-              to="/dashboard"
-              replace
-            />
-          }
-        />
-
       </Routes>
-
     </Layout>
   );
 }
 
-/* =========================================================
-   APP
-========================================================= */
-
 function App() {
-  const [user, setUser] =
-    useState(undefined);
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] =
+    useState(true);
 
   useEffect(() => {
     const unsubscribe =
       onAuthStateChanged(
         auth,
         (currentUser) => {
-          setUser(
-            currentUser
-          );
+          setUser(currentUser);
+          setAuthLoading(false);
         }
       );
 
     return unsubscribe;
   }, []);
 
-  if (user === undefined) {
+  if (authLoading) {
     return (
-      <div className="loading-screen">
-        Loading NexusCampus...
+      <div className="fullscreen-loading">
+        <div className="spinner" />
+        <span>Loading NexusCampus...</span>
       </div>
     );
   }
 
   return (
-    <BrowserRouter>
+    <Routes>
+      <Route
+        path="/register/:slug"
+        element={
+          <PublicRegistration />
+        }
+      />
 
-      <Routes>
+      <Route
+        path="/login"
+        element={
+          user ? (
+            <NavigateToDashboard />
+          ) : (
+            <Login />
+          )
+        }
+      />
 
-        <Route
-          path="/login"
-          element={
-            user ? (
-              <Navigate
-                to="/dashboard"
-                replace
-              />
-            ) : (
-              <Login />
-            )
-          }
-        />
-
-        <Route
-          path="/register/:slug"
-          element={
-            <PublicRegistration />
-          }
-        />
-
-        <Route
-          path="/*"
-          element={
-            user ? (
-              <ProtectedApp
-                user={user}
-              />
-            ) : (
-              <Navigate
-                to="/login"
-                replace
-              />
-            )
-          }
-        />
-
-      </Routes>
-
-    </BrowserRouter>
+      <Route
+        path="*"
+        element={
+          user ? (
+            <AdminApp user={user} />
+          ) : (
+            <Login />
+          )
+        }
+      />
+    </Routes>
   );
 }
 
+function NavigateToDashboard() {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    navigate("/dashboard", {
+      replace: true,
+    });
+  }, [navigate]);
+
+  return <Loading />;
+}
+
 /* =========================================================
-   START
+   ROOT
 ========================================================= */
 
-createRoot(
+ReactDOM.createRoot(
   document.getElementById("root")
 ).render(
   <React.StrictMode>
-    <App />
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
   </React.StrictMode>
 );
