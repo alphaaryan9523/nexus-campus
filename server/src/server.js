@@ -430,6 +430,88 @@ app.get("/api/clubs/:clubId/events", async (req, res) => {
    FORMS
 ========================================================= */
 
+/*
+GET ALL FORMS
+
+Useful for admin/debugging and allows the frontend
+to retrieve all registration forms.
+*/
+app.get("/api/forms", async (req, res) => {
+  try {
+    const snapshot = await db
+      .collection("forms")
+      .orderBy("createdAt", "desc")
+      .get();
+
+    const forms = snapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    res.json({
+      success: true,
+      forms
+    });
+  } catch (error) {
+    console.error("Get forms error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/*
+GET FORM BY SLUG
+
+IMPORTANT:
+This route MUST appear before:
+
+GET /api/forms/:id
+
+Otherwise Express can interpret "slug" as the :id.
+*/
+app.get("/api/forms/slug/:slug", async (req, res) => {
+  try {
+    const { slug } = req.params;
+
+    const snapshot = await db
+      .collection("forms")
+      .where("slug", "==", slug)
+      .limit(1)
+      .get();
+
+    if (snapshot.empty) {
+      return res.status(404).json({
+        success: false,
+        message: "Registration form not found",
+        slug
+      });
+    }
+
+    const doc = snapshot.docs[0];
+
+    res.json({
+      success: true,
+      form: {
+        id: doc.id,
+        ...doc.data()
+      }
+    });
+  } catch (error) {
+    console.error("Get form by slug error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/*
+GET FORM BY ID
+*/
 app.get("/api/forms/:id", async (req, res) => {
   try {
     const doc = await db
@@ -461,6 +543,9 @@ app.get("/api/forms/:id", async (req, res) => {
   }
 });
 
+/*
+GET FORM FOR EVENT
+*/
 app.get("/api/events/:eventId/form", async (req, res) => {
   try {
     const snapshot = await db
@@ -495,6 +580,9 @@ app.get("/api/events/:eventId/form", async (req, res) => {
   }
 });
 
+/*
+CREATE FORM
+*/
 app.post("/api/forms", requireAdmin, async (req, res) => {
   try {
     const {
@@ -526,7 +614,9 @@ app.post("/api/forms", requireAdmin, async (req, res) => {
 
     await formRef.set(form);
 
-    // Connect form to event
+    /*
+      CONNECT FORM TO EVENT
+    */
     await db
       .collection("events")
       .doc(eventId)
@@ -552,6 +642,9 @@ app.post("/api/forms", requireAdmin, async (req, res) => {
   }
 });
 
+/*
+UPDATE FORM
+*/
 app.put("/api/forms/:id", requireAdmin, async (req, res) => {
   try {
     await db
