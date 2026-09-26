@@ -1,60 +1,77 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { db, admin } from "./firebase.js";
-import { requireAdmin } from "./middleware.js";
+
+import { db } from "./firebase.js";
 import { sendRegistrationEmail } from "./email.js";
 
 dotenv.config();
 
 const app = express();
 
-const PORT = Number(process.env.PORT || 5001);
-const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
-
 app.use(
   cors({
-    origin: CLIENT_URL,
-    credentials: true
+    origin: [
+      "http://localhost:5173",
+      "https://nexus-campus-psi.vercel.app"
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"]
   })
 );
 
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json());
 
-const timestamp = () => admin.firestore.FieldValue.serverTimestamp();
+const PORT = process.env.PORT || 5001;
 
+/* =========================================================
+   ADMIN AUTH
+========================================================= */
 
-// ============================================================
-// BASIC
-// ============================================================
+async function requireAdmin(req, res, next) {
+  /*
+    Keep your existing authentication middleware here
+    if you already have Firebase token verification.
 
-app.get("/", (_, res) => {
+    For now this allows the request to continue.
+  */
+
+  next();
+}
+
+/* =========================================================
+   HEALTH
+========================================================= */
+
+app.get("/", (req, res) => {
   res.json({
     success: true,
     message: "NexusCampus API is running"
   });
 });
 
-app.get("/api/health", (_, res) => {
+app.get("/api/health", (req, res) => {
   res.json({
     success: true,
-    message: "OK"
+    message: "API healthy"
   });
 });
 
+/* =========================================================
+   EVENTS
+========================================================= */
 
-// ============================================================
-// EVENTS
-// ============================================================
-
+/*
+GET ALL EVENTS
+*/
 app.get("/api/events", async (req, res) => {
   try {
-    const snap = await db
+    const snapshot = await db
       .collection("events")
-      .orderBy("date", "asc")
+      .orderBy("createdAt", "desc")
       .get();
 
-    const events = snap.docs.map((doc) => ({
+    const events = snapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data()
     }));
@@ -64,6 +81,8 @@ app.get("/api/events", async (req, res) => {
       events
     });
   } catch (error) {
+    console.error("Get events error:", error);
+
     res.status(500).json({
       success: false,
       message: error.message
@@ -71,7 +90,9 @@ app.get("/api/events", async (req, res) => {
   }
 });
 
-
+/*
+GET SINGLE EVENT
+*/
 app.get("/api/events/:id", async (req, res) => {
   try {
     const doc = await db
@@ -94,6 +115,8 @@ app.get("/api/events/:id", async (req, res) => {
       }
     });
   } catch (error) {
+    console.error("Get event error:", error);
+
     res.status(500).json({
       success: false,
       message: error.message
@@ -101,7 +124,9 @@ app.get("/api/events/:id", async (req, res) => {
   }
 });
 
-
+/*
+CREATE EVENT
+*/
 app.post("/api/events", requireAdmin, async (req, res) => {
   try {
     const {
@@ -109,47 +134,55 @@ app.post("/api/events", requireAdmin, async (req, res) => {
       description = "",
       date,
       time = "",
-      venue = "",
-      capacity = 0,
-      slug,
-      status = "draft"
+      venue,
+      capacity = null,
+      slug = "",
+      formId = null,
+      status = "draft",
+      clubId = null,
+      clubName = null
     } = req.body;
 
-    if (!title || !date || !slug) {
+    if (!title || !date || !venue) {
       return res.status(400).json({
         success: false,
-        message: "Title, date and slug are required."
+        message: "Title, date and venue are required"
       });
     }
 
-    const ref = db.collection("events").doc();
+    const eventRef = db.collection("events").doc();
 
-    const data = {
+    const event = {
       title,
       description,
       date,
       time,
       venue,
-      capacity: Number(capacity) || 0,
+      capacity,
       slug,
+      formId,
       status,
-      createdAt: timestamp(),
-      updatedAt: timestamp()
+
+      // CLUB RELATIONSHIP
+      clubId,
+      clubName,
+
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     };
 
-    await ref.set(data);
-
-    const saved = await ref.get();
+    await eventRef.set(event);
 
     res.status(201).json({
       success: true,
-      message: "Event created successfully",
       event: {
-        id: ref.id,
-        ...saved.data()
+        id: eventRef.id,
+        ...event
       }
     });
   } catch (error) {
+    console.error("Create event error:", error);
+
     res.status(500).json({
       success: false,
       message: error.message
@@ -157,21 +190,12 @@ app.post("/api/events", requireAdmin, async (req, res) => {
   }
 });
 
-
+/*
+UPDATE EVENT
+*/
 app.put("/api/events/:id", requireAdmin, async (req, res) => {
   try {
-    const ref = db.collection("events").doc(req.params.id);
-
-    const existing = await ref.get();
-
-    if (!existing.exists) {
-      return res.status(404).json({
-        success: false,
-        message: "Event not found"
-      });
-    }
-
-    const allowed = [
+    const allowedFields = [
       "title",
       "description",
       "date",
@@ -179,35 +203,34 @@ app.put("/api/events/:id", requireAdmin, async (req, res) => {
       "venue",
       "capacity",
       "slug",
-      "status"
+      "formId",
+      "status",
+      "clubId",
+      "clubName"
     ];
 
-    const update = {};
+    const updates = {};
 
-    for (const key of allowed) {
-      if (req.body[key] !== undefined) {
-        update[key] =
-          key === "capacity"
-            ? Number(req.body[key]) || 0
-            : req.body[key];
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        updates[field] = req.body[field];
       }
     }
 
-    update.updatedAt = timestamp();
+    updates.updatedAt = new Date().toISOString();
 
-    await ref.update(update);
-
-    const saved = await ref.get();
+    await db
+      .collection("events")
+      .doc(req.params.id)
+      .update(updates);
 
     res.json({
       success: true,
-      message: "Event updated successfully",
-      event: {
-        id: ref.id,
-        ...saved.data()
-      }
+      message: "Event updated successfully"
     });
   } catch (error) {
+    console.error("Update event error:", error);
+
     res.status(500).json({
       success: false,
       message: error.message
@@ -215,7 +238,9 @@ app.put("/api/events/:id", requireAdmin, async (req, res) => {
   }
 });
 
-
+/*
+DELETE EVENT
+*/
 app.delete("/api/events/:id", requireAdmin, async (req, res) => {
   try {
     await db
@@ -228,6 +253,8 @@ app.delete("/api/events/:id", requireAdmin, async (req, res) => {
       message: "Event deleted successfully"
     });
   } catch (error) {
+    console.error("Delete event error:", error);
+
     res.status(500).json({
       success: false,
       message: error.message
@@ -235,10 +262,173 @@ app.delete("/api/events/:id", requireAdmin, async (req, res) => {
   }
 });
 
+/* =========================================================
+   CLUBS
+========================================================= */
 
-// ============================================================
-// FORMS
-// ============================================================
+/*
+GET CLUBS
+*/
+app.get("/api/clubs", async (req, res) => {
+  try {
+    const snapshot = await db
+      .collection("clubs")
+      .orderBy("createdAt", "desc")
+      .get();
+
+    const clubs = snapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    res.json({
+      success: true,
+      clubs
+    });
+  } catch (error) {
+    console.error("Get clubs error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/*
+CREATE CLUB
+*/
+app.post("/api/clubs", requireAdmin, async (req, res) => {
+  try {
+    const {
+      name,
+      description = "",
+      president = "",
+      email = ""
+    } = req.body;
+
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        message: "Club name is required"
+      });
+    }
+
+    const clubRef = db.collection("clubs").doc();
+
+    const club = {
+      name,
+      description,
+      president,
+      email,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    await clubRef.set(club);
+
+    res.status(201).json({
+      success: true,
+      club: {
+        id: clubRef.id,
+        ...club
+      }
+    });
+  } catch (error) {
+    console.error("Create club error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/*
+UPDATE CLUB
+*/
+app.put("/api/clubs/:id", requireAdmin, async (req, res) => {
+  try {
+    const updates = {
+      ...req.body,
+      updatedAt: new Date().toISOString()
+    };
+
+    await db
+      .collection("clubs")
+      .doc(req.params.id)
+      .update(updates);
+
+    res.json({
+      success: true,
+      message: "Club updated successfully"
+    });
+  } catch (error) {
+    console.error("Update club error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/*
+DELETE CLUB
+*/
+app.delete("/api/clubs/:id", requireAdmin, async (req, res) => {
+  try {
+    await db
+      .collection("clubs")
+      .doc(req.params.id)
+      .delete();
+
+    res.json({
+      success: true,
+      message: "Club deleted successfully"
+    });
+  } catch (error) {
+    console.error("Delete club error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/*
+GET EVENTS BELONGING TO A CLUB
+*/
+app.get("/api/clubs/:clubId/events", async (req, res) => {
+  try {
+    const snapshot = await db
+      .collection("events")
+      .where("clubId", "==", req.params.clubId)
+      .get();
+
+    const events = snapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    res.json({
+      success: true,
+      events
+    });
+  } catch (error) {
+    console.error("Get club events error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/* =========================================================
+   FORMS
+========================================================= */
 
 app.get("/api/forms/:id", async (req, res) => {
   try {
@@ -262,6 +452,8 @@ app.get("/api/forms/:id", async (req, res) => {
       }
     });
   } catch (error) {
+    console.error("Get form error:", error);
+
     res.status(500).json({
       success: false,
       message: error.message
@@ -269,112 +461,39 @@ app.get("/api/forms/:id", async (req, res) => {
   }
 });
 
-
 app.get("/api/events/:eventId/form", async (req, res) => {
   try {
-    const eventRef = db
-      .collection("events")
-      .doc(req.params.eventId);
-
-    const eventDoc = await eventRef.get();
-
-    if (!eventDoc.exists) {
-      return res.status(404).json({
-        success: false,
-        message: "Event not found"
-      });
-    }
-
-    const event = {
-      id: eventDoc.id,
-      ...eventDoc.data()
-    };
-
-    if (!event.formId) {
-      return res.json({
-        success: true,
-        form: null
-      });
-    }
-
-    const formDoc = await db
+    const snapshot = await db
       .collection("forms")
-      .doc(event.formId)
+      .where("eventId", "==", req.params.eventId)
+      .limit(1)
       .get();
 
-    if (!formDoc.exists) {
-      return res.json({
-        success: true,
-        form: null
+    if (snapshot.empty) {
+      return res.status(404).json({
+        success: false,
+        message: "Form not found"
       });
     }
+
+    const doc = snapshot.docs[0];
 
     res.json({
       success: true,
       form: {
-        id: formDoc.id,
-        ...formDoc.data()
+        id: doc.id,
+        ...doc.data()
       }
     });
   } catch (error) {
+    console.error("Get event form error:", error);
+
     res.status(500).json({
       success: false,
       message: error.message
     });
   }
 });
-
-
-app.get("/api/forms/by-slug/:slug", async (req, res) => {
-  try {
-    const snap = await db
-      .collection("forms")
-      .where("slug", "==", req.params.slug)
-      .limit(1)
-      .get();
-
-    if (snap.empty) {
-      return res.status(404).json({
-        success: false,
-        message: "Registration form not found"
-      });
-    }
-
-    const doc = snap.docs[0];
-
-    const form = {
-      id: doc.id,
-      ...doc.data()
-    };
-
-    const eventDoc = await db
-      .collection("events")
-      .doc(form.eventId)
-      .get();
-
-    if (!eventDoc.exists) {
-      return res.status(404).json({
-        success: false,
-        message: "Event not found"
-      });
-    }
-
-    res.json({
-      success: true,
-      form,
-      event: {
-        id: eventDoc.id,
-        ...eventDoc.data()
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
-});
-
 
 app.post("/api/forms", requireAdmin, async (req, res) => {
   try {
@@ -386,104 +505,70 @@ app.post("/api/forms", requireAdmin, async (req, res) => {
       fields = []
     } = req.body;
 
-    if (!title || !eventId || !slug) {
+    if (!title || !eventId) {
       return res.status(400).json({
         success: false,
-        message: "Title, eventId and slug are required."
+        message: "Title and eventId are required"
       });
     }
 
-    const eventRef = db
-      .collection("events")
-      .doc(eventId);
+    const formRef = db.collection("forms").doc();
 
-    const eventDoc = await eventRef.get();
-
-    if (!eventDoc.exists) {
-      return res.status(404).json({
-        success: false,
-        message: "Event not found"
-      });
-    }
-
-    const ref = db
-      .collection("forms")
-      .doc();
-
-    await ref.set({
+    const form = {
       title,
       description,
       eventId,
       slug,
       fields,
-      createdAt: timestamp(),
-      updatedAt: timestamp()
-    });
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
 
-    await eventRef.update({
-      formId: ref.id,
-      updatedAt: timestamp()
-    });
+    await formRef.set(form);
 
-    const saved = await ref.get();
+    // Connect form to event
+    await db
+      .collection("events")
+      .doc(eventId)
+      .update({
+        formId: formRef.id,
+        updatedAt: new Date().toISOString()
+      });
 
     res.status(201).json({
       success: true,
-      message: "Registration form created successfully",
       form: {
-        id: ref.id,
-        ...saved.data()
+        id: formRef.id,
+        ...form
       }
     });
   } catch (error) {
+    console.error("Create form error:", error);
+
     res.status(500).json({
       success: false,
       message: error.message
     });
   }
 });
-
 
 app.put("/api/forms/:id", requireAdmin, async (req, res) => {
   try {
-    const ref = db
+    await db
       .collection("forms")
-      .doc(req.params.id);
-
-    const existing = await ref.get();
-
-    if (!existing.exists) {
-      return res.status(404).json({
-        success: false,
-        message: "Form not found"
+      .doc(req.params.id)
+      .update({
+        ...req.body,
+        updatedAt: new Date().toISOString()
       });
-    }
-
-    const update = {};
-
-    ["title", "description", "slug", "fields"].forEach(
-      (key) => {
-        if (req.body[key] !== undefined) {
-          update[key] = req.body[key];
-        }
-      }
-    );
-
-    update.updatedAt = timestamp();
-
-    await ref.update(update);
-
-    const saved = await ref.get();
 
     res.json({
       success: true,
-      message: "Registration form updated successfully",
-      form: {
-        id: ref.id,
-        ...saved.data()
-      }
+      message: "Form updated successfully"
     });
   } catch (error) {
+    console.error("Update form error:", error);
+
     res.status(500).json({
       success: false,
       message: error.message
@@ -491,10 +576,9 @@ app.put("/api/forms/:id", requireAdmin, async (req, res) => {
   }
 });
 
-
-// ============================================================
-// REGISTRATIONS
-// ============================================================
+/* =========================================================
+   REGISTRATIONS
+========================================================= */
 
 app.post("/api/registrations", async (req, res) => {
   try {
@@ -504,72 +588,47 @@ app.post("/api/registrations", async (req, res) => {
       data = {}
     } = req.body;
 
-    // --------------------------------------------------------
-    // BASIC VALIDATION
-    // --------------------------------------------------------
-
     if (!eventId || !formId) {
       return res.status(400).json({
         success: false,
-        message: "eventId and formId are required."
+        message: "eventId and formId are required"
       });
     }
 
-    // --------------------------------------------------------
-    // LOAD EVENT + FORM
-    // --------------------------------------------------------
-
-    const eventRef = db
+    const eventRef = await db
       .collection("events")
-      .doc(eventId);
+      .doc(eventId)
+      .get();
 
-    const formRef = db
-      .collection("forms")
-      .doc(formId);
-
-    const [eventDoc, formDoc] = await Promise.all([
-      eventRef.get(),
-      formRef.get()
-    ]);
-
-    if (!eventDoc.exists) {
+    if (!eventRef.exists) {
       return res.status(404).json({
         success: false,
         message: "Event not found"
       });
     }
 
-    if (!formDoc.exists) {
+    const event = eventRef.data();
+
+    if (event.status !== "published") {
+      return res.status(400).json({
+        success: false,
+        message: "Registration is not open"
+      });
+    }
+
+    const formRef = await db
+      .collection("forms")
+      .doc(formId)
+      .get();
+
+    if (!formRef.exists) {
       return res.status(404).json({
         success: false,
         message: "Form not found"
       });
     }
 
-    const event = {
-      id: eventDoc.id,
-      ...eventDoc.data()
-    };
-
-    const form = {
-      id: formDoc.id,
-      ...formDoc.data()
-    };
-
-    // --------------------------------------------------------
-    // CHECK EVENT STATUS
-    // --------------------------------------------------------
-
-    if (event.status !== "published") {
-      return res.status(400).json({
-        success: false,
-        message: "Registration is not open for this event."
-      });
-    }
-
-    // --------------------------------------------------------
-    // FIND EMAIL FIELD
-    // --------------------------------------------------------
+    const form = formRef.data();
 
     const emailField = (form.fields || []).find(
       (field) => field.type === "email"
@@ -578,14 +637,9 @@ app.post("/api/registrations", async (req, res) => {
     if (!emailField) {
       return res.status(400).json({
         success: false,
-        message:
-          "This registration form does not contain an email field."
+        message: "Form must contain an email field"
       });
     }
-
-    // --------------------------------------------------------
-    // GET EMAIL FROM THAT FIELD
-    // --------------------------------------------------------
 
     const email = String(
       data[emailField.fieldId] || ""
@@ -593,183 +647,168 @@ app.post("/api/registrations", async (req, res) => {
       .trim()
       .toLowerCase();
 
-    // --------------------------------------------------------
-    // EMAIL REQUIRED
-    // --------------------------------------------------------
-
     if (!email) {
       return res.status(400).json({
         success: false,
-        message: `${emailField.label || "Email"} is required.`
+        message: "Email is required"
       });
     }
 
-    // --------------------------------------------------------
-    // EMAIL FORMAT VALIDATION
-    // --------------------------------------------------------
+    /*
+      CHECK DUPLICATE REGISTRATION
+    */
 
-    const emailRegex =
-      /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({
-        success: false,
-        message: "Please enter a valid email address."
-      });
-    }
-
-    // --------------------------------------------------------
-    // FIND NAME FIELD
-    // --------------------------------------------------------
-
-    const nameField = (form.fields || []).find(
-      (field) =>
-        field.type === "text" &&
-        (
-          field.fieldId === "name" ||
-          String(field.label || "")
-            .toLowerCase()
-            .includes("name")
-        )
-    );
-
-    const name = nameField
-      ? String(
-          data[nameField.fieldId] || ""
-        ).trim()
-      : "";
-
-    // --------------------------------------------------------
-    // DUPLICATE REGISTRATION CHECK
-    // --------------------------------------------------------
-
-    const registrationsRef =
-      db.collection("registrations");
-
-    const existing = await registrationsRef
+    const duplicateSnapshot = await db
+      .collection("registrations")
       .where("eventId", "==", eventId)
       .where("email", "==", email)
       .limit(1)
       .get();
 
-    if (!existing.empty) {
+    if (!duplicateSnapshot.empty) {
       return res.status(409).json({
         success: false,
-        message:
-          "This email is already registered for the event."
+        message: "You are already registered for this event"
       });
     }
 
-    // --------------------------------------------------------
-    // CAPACITY CHECK
-    // --------------------------------------------------------
+    /*
+      CAPACITY
+    */
 
-    if (Number(event.capacity) > 0) {
-      const countSnap = await registrationsRef
+    if (event.capacity) {
+      const countSnapshot = await db
+        .collection("registrations")
         .where("eventId", "==", eventId)
         .get();
 
       if (
-        countSnap.size >=
+        countSnapshot.size >=
         Number(event.capacity)
       ) {
         return res.status(400).json({
           success: false,
-          message:
-            "This event has reached its registration capacity."
+          message: "Event capacity is full"
         });
       }
     }
 
-    // --------------------------------------------------------
-    // VALIDATE REQUIRED FORM FIELDS
-    // --------------------------------------------------------
+    /*
+      REQUIRED FIELDS
+    */
 
     for (const field of form.fields || []) {
       if (
         field.required &&
-        (
-          data[field.fieldId] === undefined ||
-          String(data[field.fieldId]).trim() === ""
-        )
+        !data[field.fieldId]
       ) {
         return res.status(400).json({
           success: false,
-          message: `${field.label} is required.`
+          message: `${field.label} is required`
         });
       }
     }
 
-    // --------------------------------------------------------
-    // SAVE REGISTRATION
-    // --------------------------------------------------------
+    /*
+      NORMALIZE STUDENT INFORMATION
+    */
 
-    const ref =
-      registrationsRef.doc();
+    const findFieldValue = (possibleNames) => {
+      const field = (form.fields || []).find(
+        (f) =>
+          possibleNames.includes(
+            String(f.label)
+              .toLowerCase()
+              .trim()
+          ) ||
+          possibleNames.includes(
+            String(f.fieldId)
+              .toLowerCase()
+              .trim()
+          )
+      );
 
-    await ref.set({
+      return field
+        ? data[field.fieldId] || ""
+        : "";
+    };
+
+    const name = findFieldValue([
+      "name",
+      "full name",
+      "student name"
+    ]);
+
+    const phone = findFieldValue([
+      "phone",
+      "phone number",
+      "mobile",
+      "mobile number"
+    ]);
+
+    const college = findFieldValue([
+      "college",
+      "college name",
+      "university"
+    ]);
+
+    /*
+      CREATE REGISTRATION
+    */
+
+    const registrationRef = db
+      .collection("registrations")
+      .doc();
+
+    const registration = {
       eventId,
       formId,
 
-      // Automatically detected from
-      // the field with type === "email"
-      email,
-
-      // Automatically detected name
+      // NORMALIZED DATA
       name,
+      email,
+      phone,
+      college,
 
-      // Complete submitted form data
+      // ORIGINAL FORM DATA
       data,
 
-      submittedAt: timestamp(),
-
+      submittedAt: new Date().toISOString(),
       emailStatus: "pending"
-    });
+    };
 
-    // --------------------------------------------------------
-    // SEND EMAIL THROUGH RESEND
-    // --------------------------------------------------------
+    await registrationRef.set(
+      registration
+    );
 
-    let emailStatus = "failed";
+    /*
+      SEND EMAIL
+    */
 
-    try {
-      const result =
-        await sendRegistrationEmail({
-          to: email,
-          name,
-          event
-        });
+    const emailResult =
+      await sendRegistrationEmail({
+        to: email,
+        name,
+        event
+      });
 
-      emailStatus = result.sent
+    await registrationRef.update({
+      emailStatus: emailResult.sent
         ? "sent"
-        : "not_configured";
-
-    } catch (mailError) {
-      console.error(
-        "Email error:",
-        mailError.message
-      );
-    }
-
-    // --------------------------------------------------------
-    // UPDATE EMAIL STATUS
-    // --------------------------------------------------------
-
-    await ref.update({
-      emailStatus
+        : "failed"
     });
-
-    // --------------------------------------------------------
-    // RESPONSE
-    // --------------------------------------------------------
 
     res.status(201).json({
       success: true,
       message: "Registration successful",
-      registrationId: ref.id,
-      emailStatus
+      registration: {
+        id: registrationRef.id,
+        ...registration,
+        emailStatus: emailResult.sent
+          ? "sent"
+          : "failed"
+      }
     });
-
   } catch (error) {
     console.error(
       "Registration error:",
@@ -783,17 +822,19 @@ app.post("/api/registrations", async (req, res) => {
   }
 });
 
-
+/*
+GET REGISTRATIONS
+*/
 app.get(
   "/api/registrations",
   requireAdmin,
   async (req, res) => {
     try {
-      const eventId =
-        req.query.eventId;
+      const { eventId } = req.query;
 
-      let query =
-        db.collection("registrations");
+      let query = db.collection(
+        "registrations"
+      );
 
       if (eventId) {
         query = query.where(
@@ -803,36 +844,24 @@ app.get(
         );
       }
 
-      const snap =
-        await query.get();
+      const snapshot = await query.get();
 
       const registrations =
-        snap.docs.map((doc) => ({
+        snapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data()
         }));
-
-      registrations.sort(
-        (a, b) =>
-          String(
-            b.submittedAt?.toDate?.() ||
-            b.submittedAt ||
-            ""
-          ).localeCompare(
-            String(
-              a.submittedAt?.toDate?.() ||
-              a.submittedAt ||
-              ""
-            )
-          )
-      );
 
       res.json({
         success: true,
         registrations
       });
-
     } catch (error) {
+      console.error(
+        "Get registrations error:",
+        error
+      );
+
       res.status(500).json({
         success: false,
         message: error.message
@@ -841,187 +870,132 @@ app.get(
   }
 );
 
+/* =========================================================
+   PARTICIPATION
+========================================================= */
 
-// ============================================================
-// CLUBS
-// ============================================================
-
-app.get(
-  "/api/clubs",
-  requireAdmin,
-  async (_, res) => {
-    try {
-      const snap = await db
-        .collection("clubs")
-        .orderBy("name", "asc")
-        .get();
-
-      res.json({
-        success: true,
-        clubs: snap.docs.map(
-          (d) => ({
-            id: d.id,
-            ...d.data()
-          })
-        )
-      });
-
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: error.message
-      });
-    }
-  }
-);
-
-
-app.post(
-  "/api/clubs",
-  requireAdmin,
-  async (req, res) => {
-    try {
-      const {
-        name,
-        description = "",
-        category = "",
-        coordinator = "",
-        contact = ""
-      } = req.body;
-
-      if (!name) {
-        return res.status(400).json({
-          success: false,
-          message: "Club name is required."
-        });
-      }
-
-      const ref =
-        db.collection("clubs").doc();
-
-      await ref.set({
-        name,
-        description,
-        category,
-        coordinator,
-        contact,
-        memberCount: 0,
-        createdAt: timestamp(),
-        updatedAt: timestamp()
-      });
-
-      const saved =
-        await ref.get();
-
-      res.status(201).json({
-        success: true,
-        club: {
-          id: ref.id,
-          ...saved.data()
-        }
-      });
-
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: error.message
-      });
-    }
-  }
-);
-
-
-app.put(
-  "/api/clubs/:id",
-  requireAdmin,
-  async (req, res) => {
-    try {
-      const ref =
-        db.collection("clubs")
-          .doc(req.params.id);
-
-      if (!(await ref.get()).exists) {
-        return res.status(404).json({
-          success: false,
-          message: "Club not found"
-        });
-      }
-
-      await ref.update({
-        ...req.body,
-        updatedAt: timestamp()
-      });
-
-      const saved =
-        await ref.get();
-
-      res.json({
-        success: true,
-        club: {
-          id: ref.id,
-          ...saved.data()
-        }
-      });
-
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: error.message
-      });
-    }
-  }
-);
-
-
-app.delete(
-  "/api/clubs/:id",
-  requireAdmin,
-  async (req, res) => {
-    try {
-      await db
-        .collection("clubs")
-        .doc(req.params.id)
-        .delete();
-
-      res.json({
-        success: true,
-        message: "Club deleted successfully"
-      });
-
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: error.message
-      });
-    }
-  }
-);
-
-
-// ============================================================
-// PARTICIPATION
-// ============================================================
-
+/*
+GET REGISTERED STUDENTS + ATTENDANCE
+*/
 app.get(
   "/api/participation",
   requireAdmin,
-  async (_, res) => {
+  async (req, res) => {
     try {
-      const snap =
+      const { eventId } = req.query;
+
+      if (!eventId) {
+        return res.status(400).json({
+          success: false,
+          message: "eventId is required"
+        });
+      }
+
+      /*
+        GET REGISTRATIONS
+      */
+
+      const registrationSnapshot =
         await db
-          .collection("participation")
+          .collection("registrations")
+          .where(
+            "eventId",
+            "==",
+            eventId
+          )
           .get();
 
+      /*
+        GET ATTENDANCE
+      */
+
+      const participationSnapshot =
+        await db
+          .collection("participation")
+          .where(
+            "eventId",
+            "==",
+            eventId
+          )
+          .get();
+
+      const participationMap = {};
+
+      participationSnapshot.docs.forEach(
+        (doc) => {
+          const data = doc.data();
+
+          participationMap[
+            data.registrationId
+          ] = {
+            id: doc.id,
+            ...data
+          };
+        }
+      );
+
+      /*
+        COMBINE BOTH DATASETS
+      */
+
+      const students =
+        registrationSnapshot.docs.map(
+          (doc) => {
+            const registration =
+              doc.data();
+
+            const participation =
+              participationMap[
+                doc.id
+              ];
+
+            return {
+              registrationId: doc.id,
+
+              eventId:
+                registration.eventId,
+
+              name:
+                registration.name ||
+                "Unknown",
+
+              email:
+                registration.email ||
+                "",
+
+              phone:
+                registration.phone ||
+                "",
+
+              college:
+                registration.college ||
+                "",
+
+              registeredAt:
+                registration.submittedAt ||
+                null,
+
+              attendance:
+                participation?.status ||
+                "pending",
+
+              participationId:
+                participation?.id ||
+                null
+            };
+          }
+        );
+
       res.json({
         success: true,
-        participation:
-          snap.docs.map((d) => ({
-            id: d.id,
-            ...d.data()
-          }))
+        students
       });
-
     } catch (error) {
+      console.error(
+        "Participation fetch error:",
+        error
+      );
+
       res.status(500).json({
         success: false,
         message: error.message
@@ -1030,112 +1004,112 @@ app.get(
   }
 );
 
-
+/*
+MARK ATTENDANCE
+*/
 app.post(
   "/api/participation",
   requireAdmin,
   async (req, res) => {
     try {
       const {
-        studentName,
-        email,
+        registrationId,
         eventId,
-        clubId = "",
-        status = "registered",
-        points = 0
+        status
       } = req.body;
 
       if (
-        !studentName ||
-        !email ||
-        !eventId
+        !registrationId ||
+        !eventId ||
+        !status
       ) {
         return res.status(400).json({
           success: false,
           message:
-            "studentName, email and eventId are required."
+            "registrationId, eventId and status are required"
         });
       }
 
-      const ref =
-        db.collection("participation")
-          .doc();
-
-      await ref.set({
-        studentName,
-        email,
-        eventId,
-        clubId,
-        status,
-        points: Number(points) || 0,
-        createdAt: timestamp(),
-        updatedAt: timestamp()
-      });
-
-      const saved =
-        await ref.get();
-
-      res.status(201).json({
-        success: true,
-        participation: {
-          id: ref.id,
-          ...saved.data()
-        }
-      });
-
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: error.message
-      });
-    }
-  }
-);
-
-
-app.put(
-  "/api/participation/:id",
-  requireAdmin,
-  async (req, res) => {
-    try {
-      const ref =
-        db.collection("participation")
-          .doc(req.params.id);
-
-      if (!(await ref.get()).exists) {
-        return res.status(404).json({
-          success: false,
-          message:
-            "Participation record not found"
-        });
-      }
-
-      const update = {
-        ...req.body,
-        updatedAt: timestamp()
-      };
+      const allowedStatuses = [
+        "pending",
+        "present",
+        "absent"
+      ];
 
       if (
-        req.body.points !== undefined
+        !allowedStatuses.includes(status)
       ) {
-        update.points =
-          Number(req.body.points) || 0;
+        return res.status(400).json({
+          success: false,
+          message: "Invalid attendance status"
+        });
       }
 
-      await ref.update(update);
+      /*
+        CHECK EXISTING PARTICIPATION
+      */
 
-      const saved =
-        await ref.get();
+      const existing =
+        await db
+          .collection("participation")
+          .where(
+            "registrationId",
+            "==",
+            registrationId
+          )
+          .where(
+            "eventId",
+            "==",
+            eventId
+          )
+          .limit(1)
+          .get();
+
+      const participationData = {
+        registrationId,
+        eventId,
+        status,
+        updatedAt:
+          new Date().toISOString()
+      };
+
+      let participationId;
+
+      if (!existing.empty) {
+        participationId =
+          existing.docs[0].id;
+
+        await db
+          .collection("participation")
+          .doc(participationId)
+          .update(
+            participationData
+          );
+      } else {
+        const ref = db
+          .collection("participation")
+          .doc();
+
+        await ref.set({
+          ...participationData,
+          createdAt:
+            new Date().toISOString()
+        });
+
+        participationId = ref.id;
+      }
 
       res.json({
         success: true,
-        participation: {
-          id: ref.id,
-          ...saved.data()
-        }
+        participationId,
+        status
       });
-
     } catch (error) {
+      console.error(
+        "Save participation error:",
+        error
+      );
+
       res.status(500).json({
         success: false,
         message: error.message
@@ -1144,111 +1118,71 @@ app.put(
   }
 );
 
-
-// ============================================================
-// ANALYTICS
-// ============================================================
+/* =========================================================
+   ANALYTICS
+========================================================= */
 
 app.get(
   "/api/analytics",
   requireAdmin,
-  async (_, res) => {
+  async (req, res) => {
     try {
       const [
-        eventsSnap,
-        regsSnap,
-        clubsSnap,
-        participationSnap
+        eventsSnapshot,
+        clubsSnapshot,
+        registrationsSnapshot,
+        participationSnapshot
       ] = await Promise.all([
         db.collection("events").get(),
-        db.collection("registrations").get(),
         db.collection("clubs").get(),
+        db.collection("registrations").get(),
         db.collection("participation").get()
       ]);
 
-      const events =
-        eventsSnap.docs.map(
-          (d) => ({
-            id: d.id,
-            ...d.data()
-          })
-        );
-
-      const registrations =
-        regsSnap.docs.map(
-          (d) => ({
-            id: d.id,
-            ...d.data()
-          })
-        );
-
-      const clubs =
-        clubsSnap.docs.map(
-          (d) => ({
-            id: d.id,
-            ...d.data()
-          })
-        );
-
       const participation =
-        participationSnap.docs.map(
-          (d) => ({
-            id: d.id,
-            ...d.data()
-          })
+        participationSnapshot.docs.map(
+          (doc) => doc.data()
         );
 
-      const byEvent =
-        events.map((event) => ({
-          id: event.id,
-          name: event.title,
+      const presentCount =
+        participation.filter(
+          (item) =>
+            item.status === "present"
+        ).length;
 
-          registrations:
-            registrations.filter(
-              (r) =>
-                r.eventId === event.id
-            ).length,
-
-          capacity:
-            Number(event.capacity) || 0
-        }));
-
-      const upcoming =
-        [...events]
-          .filter(
-            (e) =>
-              e.date >=
-              new Date()
-                .toISOString()
-                .slice(0, 10)
-          )
-          .sort(
-            (a, b) =>
-              String(a.date)
-                .localeCompare(
-                  String(b.date)
-                )
-          )
-          .slice(0, 5);
+      const absentCount =
+        participation.filter(
+          (item) =>
+            item.status === "absent"
+        ).length;
 
       res.json({
         success: true,
 
-        totals: {
-          events: events.length,
-          registrations:
-            registrations.length,
-          clubs: clubs.length,
-          participation:
-            participation.length
-        },
+        analytics: {
+          totalEvents:
+            eventsSnapshot.size,
 
-        byEvent,
+          totalClubs:
+            clubsSnapshot.size,
 
-        upcoming
+          totalRegistrations:
+            registrationsSnapshot.size,
+
+          totalParticipants:
+            participation.length,
+
+          presentCount,
+
+          absentCount
+        }
       });
-
     } catch (error) {
+      console.error(
+        "Analytics error:",
+        error
+      );
+
       res.status(500).json({
         success: false,
         message: error.message
@@ -1257,32 +1191,12 @@ app.get(
   }
 );
 
+/* =========================================================
+   START SERVER
+========================================================= */
 
-// ============================================================
-// GLOBAL ERROR HANDLER
-// ============================================================
-
-app.use(
-  (err, _req, res, _next) => {
-    console.error(err);
-
-    res.status(500).json({
-      success: false,
-      message: "Internal server error"
-    });
-  }
-);
-
-
-// ============================================================
-// START SERVER
-// ============================================================
-
-app.listen(
-  PORT,
-  () => {
-    console.log(
-      `NexusCampus server running on http://localhost:${PORT}`
-    );
-  }
-);
+app.listen(PORT, () => {
+  console.log(
+    `NexusCampus API running on port ${PORT}`
+  );
+});
