@@ -30,10 +30,15 @@ if (!admin.apps.length) {
 
     credential = admin.credential.cert(serviceAccount);
   } else {
+    const privateKey = Buffer.from(
+      process.env.FIREBASE_PRIVATE_KEY_B64,
+      "base64"
+    ).toString("utf8");
+
     credential = admin.credential.cert({
       projectId: process.env.FIREBASE_PROJECT_ID,
       clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
+      privateKey
     });
   }
 
