@@ -30,6 +30,10 @@ if (!admin.apps.length) {
 
     credential = admin.credential.cert(serviceAccount);
   } else {
+    if (!process.env.FIREBASE_PRIVATE_KEY_B64) {
+      throw new Error("FIREBASE_PRIVATE_KEY_B64 is missing");
+    }
+
     const privateKey = Buffer.from(
       process.env.FIREBASE_PRIVATE_KEY_B64,
       "base64"
